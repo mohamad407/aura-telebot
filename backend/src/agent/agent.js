@@ -5,35 +5,7 @@ const path = require("node:path");
 const crypto = require("node:crypto");
 
 // ============================================================
-// AURA AI APPLICATION AGENT
-// ============================================================
-//
-// User request
-//      ↓
-// Requirement analysis
-//      ↓
-// Whole application generation
-//      ↓
-// HTML + CSS + JavaScript
-//      ↓
-// Requirement review
-//      ↓
-// Automatic repair
-//      ↓
-// Static validation
-//      ↓
-// Ready for Vercel
-//
-// Generated applications:
-// - HTML
-// - CSS
-// - Vanilla JavaScript
-//
-// No React
-// No JSX
-// No Vite
-// No package.json
-// No npm build
+// AURA AGENT
 // ============================================================
 
 const PROJECTS_DIR = path.resolve(
@@ -41,8 +13,8 @@ const PROJECTS_DIR = path.resolve(
   "../projects"
 );
 
-const AI_TIMEOUT_MS = 120000;
-const MAX_REVIEW_REPAIRS = 2;
+const AI_TIMEOUT_MS = 90000;
+const REVIEW_TIMEOUT_MS = 60000;
 
 const GROQ_MODEL =
   process.env.GROQ_MODEL ||
@@ -59,7 +31,7 @@ let groqDisabledUntil = 0;
 let openRouterDisabledUntil = 0;
 
 // ============================================================
-// SAFE LOGGING
+// HELPERS
 // ============================================================
 
 function redactSecrets(value) {
@@ -71,16 +43,12 @@ function redactSecrets(value) {
     /OPENROUTER_API_KEY\s*=\s*[^\s]+/gi,
     /VERCEL_CLIENT_SECRET\s*=\s*[^\s]+/gi,
     /VERCEL_TOKEN\s*=\s*[^\s]+/gi,
-    /Bearer\s+[A-Za-z0-9._-]+/gi,
-    /sk-[A-Za-z0-9_-]+/gi,
-    /gsk_[A-Za-z0-9_-]+/gi
+    /Authorization:\s*Bearer\s+[^\s]+/gi,
+    /Bearer\s+[A-Za-z0-9._-]+/gi
   ];
 
   for (const pattern of patterns) {
-    text = text.replace(
-      pattern,
-      "[REDACTED]"
-    );
+    text = text.replace(pattern, "[REDACTED]");
   }
 
   return text;
@@ -94,11 +62,6 @@ function safeError(error) {
   );
 }
 
-// ============================================================
-// HTML ESCAPE
-// IMPORTANT: fixes "escapeHtml is not defined"
-// ============================================================
-
 function escapeHtml(value) {
   return String(value || "")
     .replace(/&/g, "&amp;")
@@ -108,34 +71,23 @@ function escapeHtml(value) {
     .replace(/'/g, "&#039;");
 }
 
-// ============================================================
-// PROJECT NAME
-// ============================================================
-
 function sanitizeProjectName(input) {
   let name = String(input || "")
     .trim()
     .toLowerCase()
-    .replace(/[^a-z0-9_-]+/g, "-")
-    .replace(/^-+/g, "")
-    .replace(/-+$/g, "")
-    .replace(/-+/g, "-");
+    .replace(/[^a-z0-9-]+/g, "-")
+    .replace(/-+/g, "-")
+    .replace(/^-+|-+$/g, "");
 
   if (!name) {
     name = "aura-website";
   }
 
-  if (name.length > 60) {
-    name = name.slice(0, 60);
-  }
-
-  return name;
+  return name.slice(0, 60);
 }
 
-function deriveProjectName(userRequest) {
-  const text = String(
-    userRequest || ""
-  ).toLowerCase();
+function deriveProjectName(request) {
+  const text = String(request || "").toLowerCase();
 
   if (text.includes("portfolio")) {
     return "aura-portfolio";
@@ -151,14 +103,9 @@ function deriveProjectName(userRequest) {
 
   if (
     text.includes("ecommerce") ||
-    text.includes("e-commerce")
-  ) {
-    return "aura-store";
-  }
-
-  if (
-    text.includes("shop") ||
-    text.includes("store")
+    text.includes("e-commerce") ||
+    text.includes("store") ||
+    text.includes("shop")
   ) {
     return "aura-store";
   }
@@ -167,82 +114,55 @@ function deriveProjectName(userRequest) {
 }
 
 // ============================================================
-// PROJECT PATH
+// PROJECT PATHS
 // ============================================================
 
 function getProjectRoot(projectName) {
-  const safeName =
-    sanitizeProjectName(projectName);
+  const safeName = sanitizeProjectName(projectName);
 
-  const projectRoot =
-    path.resolve(
-      PROJECTS_DIR,
-      safeName
-    );
+  const root = path.resolve(
+    PROJECTS_DIR,
+    safeName
+  );
 
-  const projectsRoot =
-    path.resolve(
-      PROJECTS_DIR
-    );
+  const base = path.resolve(
+    PROJECTS_DIR
+  );
 
-  if (
-    !projectRoot.startsWith(
-      projectsRoot + path.sep
-    )
-  ) {
-    throw new Error(
-      "Unsafe project directory."
-    );
+  if (!root.startsWith(base + path.sep)) {
+    throw new Error("Unsafe project path.");
   }
 
-  return projectRoot;
+  return root;
 }
 
 function ensureProject(projectName) {
-  const projectRoot =
-    getProjectRoot(projectName);
+  const root = getProjectRoot(projectName);
 
-  fs.mkdirSync(
-    projectRoot,
-    {
-      recursive: true
-    }
-  );
+  fs.mkdirSync(root, {
+    recursive: true
+  });
 
-  return projectRoot;
+  return root;
 }
 
-// ============================================================
-// FILE PATH SECURITY
-// ============================================================
-
 function normalizeFilePath(filePath) {
-  let value = String(filePath || "")
+  const value = String(filePath || "")
     .replace(/\\/g, "/")
     .trim()
     .toLowerCase();
 
-  value = value.replace(
-    /^\/+/,
-    ""
-  );
-
-  if (!value) {
-    throw new Error(
-      "Invalid file path."
-    );
-  }
-
   if (
+    !value ||
     value.includes("..") ||
-    path.isAbsolute(filePath)
+    path.isAbsolute(value)
   ) {
     throw new Error(
       `Unsafe file path: ${filePath}`
     );
   }
 
-  return value;
+  return value.replace(/^\/+/, "");
 }
 
 function writeProjectFile(
@@ -251,9 +171,7 @@ function writeProjectFile(
   content
 ) {
   const safePath =
-    normalizeFilePath(
-      filePath
-    );
+    normalizeFilePath(filePath);
 
   const fullPath =
     path.resolve(
@@ -261,13 +179,9 @@ function writeProjectFile(
       safePath
     );
 
-  if (
-    !fullPath.startsWith(
-      projectRoot + path.sep
-    )
-  ) {
+  if (!fullPath.startsWith(projectRoot + path.sep)) {
     throw new Error(
-      `Unsafe output path: ${safePath}`
+      `Unsafe project file path: ${safePath}`
     );
   }
 
@@ -283,10 +197,6 @@ function writeProjectFile(
     String(content || ""),
     "utf8"
   );
-
-  console.log(
-    `📄 Created: ${safePath}`
-  );
 }
 
 function readProjectFile(
@@ -294,9 +204,7 @@ function readProjectFile(
   filePath
 ) {
   const safePath =
-    normalizeFilePath(
-      filePath
-    );
+    normalizeFilePath(filePath);
 
   const fullPath =
     path.resolve(
@@ -304,15 +212,7 @@ function readProjectFile(
       safePath
     );
 
-  if (
-    !fs.existsSync(fullPath)
-  ) {
-    return null;
-  }
-
-  if (
-    !fs.statSync(fullPath).isFile()
-  ) {
+  if (!fs.existsSync(fullPath)) {
     return null;
   }
 
@@ -325,27 +225,23 @@ function readProjectFile(
 function listProjectFiles(
   projectRoot
 ) {
-  const files = [];
+  const result = [];
 
-  function walk(directory) {
-    if (
-      !fs.existsSync(directory)
-    ) {
+  function walk(dir) {
+    if (!fs.existsSync(dir)) {
       return;
     }
 
-    const entries =
-      fs.readdirSync(
-        directory,
+    for (
+      const entry of fs.readdirSync(
+        dir,
         {
           withFileTypes: true
         }
-      );
-
-    for (const entry of entries) {
+      )
+    ) {
       if (
-        entry.name ===
-          "node_modules" ||
+        entry.name === "node_modules" ||
         entry.name === ".git"
       ) {
         continue;
@@ -353,25 +249,20 @@ function listProjectFiles(
 
       const fullPath =
         path.join(
-          directory,
+          dir,
           entry.name
         );
 
-      if (
-        entry.isDirectory()
-      ) {
+      if (entry.isDirectory()) {
         walk(fullPath);
       } else {
-        files.push(
+        result.push(
           path
             .relative(
               projectRoot,
               fullPath
             )
-            .replace(
-              /\\/g,
-              "/"
-            )
+            .replace(/\\/g, "/")
             .toLowerCase()
         );
       }
@@ -380,17 +271,17 @@ function listProjectFiles(
 
   walk(projectRoot);
 
-  return files;
+  return result;
 }
 
 // ============================================================
-// HTTP FETCH
+// AI FETCH WITH HARD TIMEOUT
 // ============================================================
 
 async function fetchWithTimeout(
   url,
-  options = {},
-  timeoutMs = AI_TIMEOUT_MS
+  options,
+  timeoutMs
 ) {
   const controller =
     new AbortController();
@@ -406,10 +297,17 @@ async function fetchWithTimeout(
       url,
       {
         ...options,
-        signal:
-          controller.signal
+        signal: controller.signal
       }
     );
+  } catch (error) {
+    if (error?.name === "AbortError") {
+      throw new Error(
+        `AI request timed out after ${timeoutMs / 1000} seconds.`
+      );
+    }
+
+    throw error;
   } finally {
     clearTimeout(timer);
   }
@@ -423,21 +321,18 @@ async function askGroq(
   messages,
   options = {}
 ) {
-  const apiKey =
+  const key =
     process.env.GROQ_API_KEY;
 
-  if (!apiKey) {
+  if (!key) {
     throw new Error(
       "GROQ_API_KEY is missing."
     );
   }
 
-  if (
-    Date.now() <
-    groqDisabledUntil
-  ) {
+  if (Date.now() < groqDisabledUntil) {
     throw new Error(
-      "Groq temporarily disabled because of rate limit."
+      "Groq is temporarily disabled because of rate limiting."
     );
   }
 
@@ -452,7 +347,7 @@ async function askGroq(
             "application/json",
 
           Authorization:
-            `Bearer ${apiKey}`
+            `Bearer ${key}`
         },
 
         body: JSON.stringify({
@@ -468,18 +363,18 @@ async function askGroq(
 
           max_tokens:
             options.max_tokens ||
-            12000
+            7000
         })
-      }
+      },
+      options.timeoutMs ||
+        AI_TIMEOUT_MS
     );
 
   const text =
     await response.text();
 
   if (!response.ok) {
-    if (
-      response.status === 429
-    ) {
+    if (response.status === 429) {
       groqDisabledUntil =
         Date.now() +
         GROQ_COOLDOWN_MS;
@@ -488,7 +383,7 @@ async function askGroq(
     throw new Error(
       `Groq ${response.status}: ${text.slice(
         0,
-        1500
+        1800
       )}`
     );
   }
@@ -504,13 +399,9 @@ async function askGroq(
   }
 
   const content =
-    data?.choices?.[0]
-      ?.message?.content;
+    data?.choices?.[0]?.message?.content;
 
-  if (
-    !content ||
-    !String(content).trim()
-  ) {
+  if (!content) {
     throw new Error(
       "Groq returned empty content."
     );
@@ -527,21 +418,18 @@ async function askOpenRouter(
   messages,
   options = {}
 ) {
-  const apiKey =
+  const key =
     process.env.OPENROUTER_API_KEY;
 
-  if (!apiKey) {
+  if (!key) {
     throw new Error(
       "OPENROUTER_API_KEY is missing."
     );
   }
 
-  if (
-    Date.now() <
-    openRouterDisabledUntil
-  ) {
+  if (Date.now() < openRouterDisabledUntil) {
     throw new Error(
-      "OpenRouter temporarily disabled because of rate limit."
+      "OpenRouter is temporarily disabled because of rate limiting."
     );
   }
 
@@ -556,7 +444,7 @@ async function askOpenRouter(
             "application/json",
 
           Authorization:
-            `Bearer ${apiKey}`,
+            `Bearer ${key}`,
 
           "HTTP-Referer":
             process.env.OPENROUTER_SITE_URL ||
@@ -580,18 +468,18 @@ async function askOpenRouter(
 
           max_tokens:
             options.max_tokens ||
-            12000
+            7000
         })
-      }
+      },
+      options.timeoutMs ||
+        AI_TIMEOUT_MS
     );
 
   const text =
     await response.text();
 
   if (!response.ok) {
-    if (
-      response.status === 429
-    ) {
+    if (response.status === 429) {
       openRouterDisabledUntil =
         Date.now() +
         OPENROUTER_COOLDOWN_MS;
@@ -600,7 +488,7 @@ async function askOpenRouter(
     throw new Error(
       `OpenRouter ${response.status}: ${text.slice(
         0,
-        1500
+        1800
       )}`
     );
   }
@@ -616,13 +504,9 @@ async function askOpenRouter(
   }
 
   const content =
-    data?.choices?.[0]
-      ?.message?.content;
+    data?.choices?.[0]?.message?.content;
 
-  if (
-    !content ||
-    !String(content).trim()
-  ) {
+  if (!content) {
     throw new Error(
       "OpenRouter returned empty content."
     );
@@ -643,12 +527,10 @@ async function askAI(
 
   if (
     process.env.GROQ_API_KEY &&
-    Date.now() >=
-      groqDisabledUntil
+    Date.now() >= groqDisabledUntil
   ) {
     providers.push({
       name: "Groq",
-
       run: () =>
         askGroq(
           messages,
@@ -659,12 +541,10 @@ async function askAI(
 
   if (
     process.env.OPENROUTER_API_KEY &&
-    Date.now() >=
-      openRouterDisabledUntil
+    Date.now() >= openRouterDisabledUntil
   ) {
     providers.push({
       name: "OpenRouter",
-
       run: () =>
         askOpenRouter(
           messages,
@@ -679,8 +559,7 @@ async function askAI(
     );
   }
 
-  let lastError =
-    null;
+  let lastError = null;
 
   for (
     const provider of providers
@@ -698,126 +577,108 @@ async function askAI(
       );
 
       return result;
-    } catch (
-      error
-    ) {
+    } catch (error) {
       lastError = error;
 
       console.log(
-        `⚠️ ${provider.name} failed.`
-      );
-
-      console.log(
-        safeError(error)
+        `⚠️ ${provider.name} failed: ${safeError(
+          error
+        )}`
       );
     }
   }
 
   throw new Error(
-    `All AI providers failed. ${
-      lastError
-        ? safeError(lastError)
-        : ""
-    }`
+    lastError
+      ? safeError(lastError)
+      : "All AI providers failed."
   );
 }
 
 // ============================================================
-// JSON EXTRACTION
+// JSON PARSER
 // ============================================================
 
 function extractJson(
-  content
+  value
 ) {
   let text =
-    String(
-      content || ""
-    ).trim();
+    String(value || "")
+      .trim();
 
-  text = text
-    .replace(
-      /^```json\s*/i,
-      ""
-    )
-    .replace(
-      /^```\s*/i,
-      ""
-    )
-    .replace(
-      /\s*```$/i,
-      ""
-    )
-    .trim();
+  text =
+    text
+      .replace(/^```json\s*/i, "")
+      .replace(/^```\s*/i, "")
+      .replace(/\s*```$/i, "")
+      .trim();
 
-  const start =
+  const first =
     text.indexOf("{");
 
-  const end =
+  const last =
     text.lastIndexOf("}");
 
   if (
-    start === -1 ||
-    end === -1 ||
-    end <= start
+    first === -1 ||
+    last === -1 ||
+    last <= first
   ) {
     throw new Error(
-      "AI response did not contain a JSON object."
+      "AI response does not contain a JSON object."
     );
   }
 
-  const jsonText =
-    text.slice(
-      start,
-      end + 1
-    );
-
   try {
     return JSON.parse(
-      jsonText
+      text.slice(
+        first,
+        last + 1
+      )
     );
-  } catch (
-    error
-  ) {
+  } catch (error) {
     throw new Error(
-      `AI returned invalid JSON: ${error.message}`
+      `Invalid AI JSON: ${error.message}`
     );
   }
 }
 
 // ============================================================
-// REQUIREMENTS ANALYZER
+// REQUIREMENT ANALYSIS
 // ============================================================
 
 async function analyzeRequirements(
-  userRequest
+  request
 ) {
   const prompt = `
-You are AURA's senior product requirements analyst.
-
-Convert the user's request into a complete, precise implementation specification.
+Analyze this website request and create a precise implementation specification.
 
 USER REQUEST:
-${String(
-  userRequest
-).slice(
-  0,
-  18000
-)}
+${String(request).slice(0, 14000)}
 
-RULES:
+Preserve every explicit requirement.
 
-1. Preserve exact branding.
-2. Preserve exact data.
-3. Preserve exact product count when specified.
-4. Preserve exact prices.
-5. Preserve exact ratings.
-6. Preserve exact stock values.
-7. Preserve requested features.
-8. Preserve persistence requirements.
-9. Preserve requested interactions.
-10. Do not invent a backend when the user asked frontend-only.
-11. Do not replace vanilla HTML/CSS/JS with React.
-12. Do not simplify a complex application into a landing page.
+If the request says EXACTLY 3 products,
+the specification MUST keep exactly 3.
+
+If it provides exact:
+- names
+- prices
+- ratings
+- stock
+- text
+
+preserve them exactly.
+
+If it requests:
+- localStorage
+- cart
+- checkout
+- payment validation
+- order history
+- search
+
+include all of them.
 
 Return ONLY JSON:
 
@@ -827,13 +688,11 @@ Return ONLY JSON:
     "name": "",
     "tagline": ""
   },
-  "pages": [],
   "features": [],
-  "data": [],
+  "exactData": [],
   "persistence": [],
-  "uiRequirements": [],
-  "validationRequirements": [],
-  "specialRequirements": []
+  "designRequirements": [],
+  "validationRequirements": []
 }
 `;
 
@@ -843,9 +702,8 @@ Return ONLY JSON:
         {
           role: "system",
           content:
-            "You are a senior requirements analyst. Return JSON only."
+            "You are a senior frontend product analyst. Return JSON only."
         },
-
         {
           role: "user",
           content:
@@ -854,113 +712,77 @@ Return ONLY JSON:
       ],
       {
         temperature: 0.1,
-        max_tokens: 5000
+        max_tokens: 4500,
+        timeoutMs: REVIEW_TIMEOUT_MS
       }
     );
 
-  return extractJson(
-    response
-  );
+  return extractJson(response);
 }
 
 function fallbackRequirements(
-  userRequest
+  request
 ) {
   return {
     projectName:
-      deriveProjectName(
-        userRequest
-      ),
+      deriveProjectName(request),
 
     brand: {
       name:
         "AURA Website",
 
       tagline:
-        String(
-          userRequest
-        ).slice(
+        String(request).slice(
           0,
           120
         )
     },
 
-    pages: [
-      "Home"
-    ],
-
-    features: [
-      "Responsive navigation",
-      "Hero section",
-      "Main content",
-      "Interactive controls"
-    ],
-
-    data: [],
-
+    features: [],
+    exactData: [],
     persistence: [],
-
-    uiRequirements: [
+    designRequirements: [
       "Modern",
-      "Clean",
       "Responsive",
-      "Mobile friendly"
+      "Professional"
     ],
-
-    validationRequirements: [
-      "No broken required features."
-    ],
-
-    specialRequirements: []
+    validationRequirements: []
   };
 }
 
 // ============================================================
-// COMPLETE APPLICATION GENERATOR
+// FILE PROMPT
 // ============================================================
 
-async function generateCompleteApplication(
-  userRequest,
+function buildFilePrompt(
+  file,
+  request,
   specification,
-  projectName
+  existingFiles
 ) {
-  const prompt = `
+  const common = `
 You are AURA's senior frontend engineer.
 
-You are building ONE COMPLETE FRONTEND APPLICATION.
+Build ONE COMPLETE frontend application.
 
-Do NOT treat this as three unrelated file-generation tasks.
+Original user request:
+${String(request).slice(0, 14000)}
 
-USER REQUEST:
-${String(
-  userRequest
-).slice(
-  0,
-  18000
-)}
-
-STRUCTURED REQUIREMENTS:
+Structured requirements:
 ${JSON.stringify(
   specification,
   null,
   2
 )}
 
-PROJECT NAME:
-${projectName}
-
-============================================================
-TECHNOLOGY
-============================================================
+TECHNOLOGY:
 
 Use ONLY:
-
 - HTML5
 - CSS3
 - Vanilla JavaScript
 
 Do NOT use:
-
 - React
 - JSX
 - Next.js
@@ -970,159 +792,161 @@ Do NOT use:
 - TypeScript
 - Node
 - Express
-- backend code
 
-============================================================
-FILES
-============================================================
+The user explicitly wants a frontend-only application.
 
-Return exactly:
+The application must be production-quality, responsive,
+functional, polished, and visually coherent.
 
-index.html
-style.css
-script.js
+Do not simplify the request.
 
-They must work together as ONE application.
+Do not invent replacement data.
 
-============================================================
-IMPLEMENTATION REQUIREMENTS
-============================================================
+Do not add random products when the user specifies exact products.
 
-Implement ALL explicit requirements.
+Do not create fake buttons.
 
-Do not omit features.
+All interactive features must work.
 
-Do not replace real functionality with fake buttons.
+Use localStorage wherever the user requires persistence.
 
-If the request says localStorage:
-actually use localStorage.
+If Lucide icons are requested, use the browser CDN and
+initialize lucide.createIcons().
 
-If it says exact products:
-use exactly those products.
+Current other files:
 
-If it says exact price:
-preserve the price.
+INDEX:
+${String(
+  existingFiles["index.html"] || ""
+).slice(0, 12000)}
 
-If it says exact stock:
-preserve the stock.
+CSS:
+${String(
+  existingFiles["style.css"] || ""
+).slice(0, 12000)}
 
-If it says checkout:
-implement checkout.
+JS:
+${String(
+  existingFiles["script.js"] || ""
+).slice(0, 18000)}
+`;
 
-If it says payment validation:
-implement validation.
+  if (file === "index.html") {
+    return `
+${common}
 
-If it says order history:
-implement order history.
+Generate ONLY the complete index.html.
 
-If it says search:
-implement real-time search.
+Requirements:
+- valid HTML5
+- semantic structure
+- responsive application layout
+- all required sections
+- all IDs/classes needed by JavaScript
+- link ./style.css
+- load ./script.js
+- include Lucide CDN if requested
+- no markdown
+- no JSON
+- no explanation
 
-If it says cart:
-implement a real cart.
+Return only HTML.
+`;
+  }
 
-If it says responsive:
-make it genuinely responsive.
+  if (file === "style.css") {
+    return `
+${common}
 
-============================================================
-DESIGN
-============================================================
+Generate ONLY the complete style.css.
 
-Build a polished production-style UI.
+Requirements:
+- polished visual design
+- responsive desktop/tablet/mobile
+- modern spacing
+- strong hierarchy
+- polished cards
+- buttons
+- forms
+- state screens
+- cart UI
+- checkout UI
+- success UI
+- no framework
+- no explanation
 
-Use:
+Return only CSS.
+`;
+  }
 
-- strong visual hierarchy
-- responsive spacing
-- good typography
-- clean cards
-- polished buttons
-- hover states
-- focus states
-- mobile layout
-- accessible labels
-- sensible transitions
-- modern color palette
-- realistic product/image areas where appropriate
+  return `
+${common}
 
-Do not make it look like a generic generated template.
+Generate ONLY the complete script.js.
 
-============================================================
-LUCIDE ICONS
-============================================================
+Requirements:
+- implement every requested interaction
+- real search
+- real cart
+- real quantity changes
+- real remove
+- real totals
+- checkout state
+- validation
+- payment flow
+- order history
+- localStorage persistence
+- stock handling
+- buttons must work
+- no external JS packages except requested Lucide CDN
+- no React
+- no imports
+- no npm
 
-If Lucide icons are requested, use the browser CDN:
+Do not return fake event handlers.
 
-<script src="https://unpkg.com/lucide@latest"></script>
-
-Use data-lucide icons and initialize:
-
-lucide.createIcons();
-
-Do not use React icon libraries.
-
-============================================================
-DATA PERSISTENCE
-============================================================
-
-When localStorage is requested, design a clear persistence layer.
-
-Example:
-
-localStorage keys may include:
-
-- aura_cart
-- aura_products
-- aura_orders
-- aura_checkout
-
-Use JSON.parse/JSON.stringify safely.
-
-Handle malformed localStorage data.
-
-============================================================
-QUALITY
-============================================================
-
-Every visible interactive control must have working JavaScript.
-
-Do not create:
-
-- fake Add to Cart buttons
-- fake quantity controls
-- fake checkout
-- fake payment
-- fake search
-- fake navigation
-
-============================================================
-OUTPUT
-============================================================
-
-Return ONLY JSON:
-
-{
-  "index.html": "...",
-  "style.css": "...",
-  "script.js": "..."
+Return only JavaScript.
+`;
 }
 
-Do not return Markdown fences.
+// ============================================================
+// CLEAN AI FILE OUTPUT
+// ============================================================
 
-Do not add explanations.
+function cleanCodeOutput(
+  value
+) {
+  let text =
+    String(
+      value || ""
+    ).trim();
 
-Do not add metadata.
+  text =
+    text
+      .replace(/^```[a-z0-9_-]*\s*/i, "")
+      .replace(/\s*```$/i, "")
+      .trim();
 
-Do not add:
+  return text;
+}
 
-"User Safety: safe"
+// ============================================================
+// SINGLE FILE GENERATION
+// ============================================================
 
-"Safety: safe"
-
-"As an AI"
-
-or similar text.
-`;
+async function generateSingleFile(
+  file,
+  request,
+  specification,
+  existingFiles
+) {
+  const prompt =
+    buildFilePrompt(
+      file,
+      request,
+      specification,
+      existingFiles
+    );
 
   const response =
     await askAI(
@@ -1130,9 +954,8 @@ or similar text.
         {
           role: "system",
           content:
-            "You are an expert senior frontend engineer. Return JSON only."
+            "Return only valid source code for the requested file."
         },
-
         {
           role: "user",
           content:
@@ -1140,77 +963,41 @@ or similar text.
         }
       ],
       {
-        temperature: 0.25,
-        max_tokens: 30000
+        temperature:
+          0.25,
+
+        max_tokens:
+          file === "script.js"
+            ? 11000
+            : 7000,
+
+        timeoutMs:
+          AI_TIMEOUT_MS
       }
     );
 
-  const data =
-    extractJson(
-      response
-    );
-
-  const required = [
-    "index.html",
-    "style.css",
-    "script.js"
-  ];
-
-  for (
-    const file of required
-  ) {
-    if (
-      typeof data[file] !==
-      "string" ||
-      !data[file].trim()
-    ) {
-      throw new Error(
-        `Generated ${file} is missing or empty.`
-      );
-    }
-  }
-
-  return {
-    "index.html":
-      data[
-        "index.html"
-      ],
-
-    "style.css":
-      data[
-        "style.css"
-      ],
-
-    "script.js":
-      data[
-        "script.js"
-      ]
-  };
+  return cleanCodeOutput(
+    response
+  );
 }
 
 // ============================================================
-// BASIC STATIC VALIDATION
+// STATIC VALIDATION
 // ============================================================
 
-function validateStaticFiles(
+function validateFiles(
   files
 ) {
   const errors = [];
 
   const html =
-    files?.[
-      "index.html"
-    ] || "";
+    files["index.html"] || "";
 
   const css =
-    files?.[
-      "style.css"
-    ] || "";
+    files["style.css"] || "";
 
   const js =
-    files?.[
-      "script.js"
-    ] || "";
+    files["script.js"] || "";
 
   if (!html.trim()) {
     errors.push(
@@ -1237,29 +1024,7 @@ function validateStaticFiles(
     )
   ) {
     errors.push(
-      "index.html is missing DOCTYPE."
-    );
-  }
-
-  if (
-    html &&
-    !/<html[\s>]/i.test(
-      html
-    )
-  ) {
-    errors.push(
-      "index.html is missing html element."
-    );
-  }
-
-  if (
-    html &&
-    !/<body[\s>]/i.test(
-      html
-    )
-  ) {
-    errors.push(
-      "index.html is missing body element."
+      "Missing HTML doctype."
     );
   }
 
@@ -1270,7 +1035,7 @@ function validateStaticFiles(
     )
   ) {
     errors.push(
-      "index.html does not reference style.css."
+      "style.css is not referenced."
     );
   }
 
@@ -1281,7 +1046,7 @@ function validateStaticFiles(
     )
   ) {
     errors.push(
-      "index.html does not reference script.js."
+      "script.js is not referenced."
     );
   }
 
@@ -1296,7 +1061,7 @@ function validateStaticFiles(
     /\bReactDOM\b/i.test(
       combined
     ) ||
-    /\bReact\b/i.test(
+    /\bimport\s+React\b/i.test(
       combined
     ) ||
     /\.jsx\b/i.test(
@@ -1304,23 +1069,20 @@ function validateStaticFiles(
     )
   ) {
     errors.push(
-      "React/JSX content detected."
+      "React/JSX detected."
     );
   }
 
   if (
+    /\bVite\b/i.test(
+      combined
+    ) ||
     /package\.json/i.test(
-      combined
-    ) ||
-    /npm install/i.test(
-      combined
-    ) ||
-    /vite/i.test(
       combined
     )
   ) {
     errors.push(
-      "Framework/build-tool content detected."
+      "Vite/npm content detected."
     );
   }
 
@@ -1392,683 +1154,21 @@ function validateStaticFiles(
 }
 
 // ============================================================
-// FALLBACK APP
-// ============================================================
-
-function fallbackFiles(
-  userRequest
-) {
-  const safeRequest =
-    escapeHtml(
-      userRequest
-    );
-
-  const indexHtml =
-`<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8">
-
-  <meta
-    name="viewport"
-    content="width=device-width, initial-scale=1.0"
-  >
-
-  <meta
-    name="description"
-    content="Website created by AURA"
-  >
-
-  <title>AURA Website</title>
-
-  <link
-    rel="stylesheet"
-    href="./style.css"
-  >
-</head>
-
-<body>
-
-<header class="site-header">
-  <div class="container nav">
-
-    <a
-      href="#home"
-      class="logo"
-    >
-      AURA
-    </a>
-
-    <nav
-      class="nav-links"
-    >
-      <a href="#home">
-        Home
-      </a>
-
-      <a href="#features">
-        Features
-      </a>
-
-      <a href="#contact">
-        Contact
-      </a>
-    </nav>
-
-    <button
-      id="menuButton"
-      class="menu-button"
-      type="button"
-      aria-label="Open menu"
-    >
-      ☰
-    </button>
-
-  </div>
-</header>
-
-<main>
-
-<section
-  id="home"
-  class="hero"
->
-
-  <div class="container hero-inner">
-
-    <p class="eyebrow">
-      CREATED WITH AURA
-    </p>
-
-    <h1>
-      Your idea.
-      <span>Your website.</span>
-    </h1>
-
-    <p class="hero-copy">
-      ${safeRequest}
-    </p>
-
-    <a
-      class="primary-button"
-      href="#features"
-    >
-      Explore
-    </a>
-
-  </div>
-
-</section>
-
-<section
-  id="features"
-  class="section"
->
-
-  <div class="container">
-
-    <p class="eyebrow">
-      FEATURES
-    </p>
-
-    <h2>
-      Clean. Fast. Modern.
-    </h2>
-
-    <div class="cards">
-
-      <article class="card">
-        <span class="card-number">
-          01
-        </span>
-
-        <h3>
-          Modern Design
-        </h3>
-
-        <p>
-          Polished responsive interface.
-        </p>
-      </article>
-
-      <article class="card">
-        <span class="card-number">
-          02
-        </span>
-
-        <h3>
-          Interactive
-        </h3>
-
-        <p>
-          Browser-based functionality.
-        </p>
-      </article>
-
-      <article class="card">
-        <span class="card-number">
-          03
-        </span>
-
-        <h3>
-          Ready to Deploy
-        </h3>
-
-        <p>
-          Lightweight static architecture.
-        </p>
-      </article>
-
-    </div>
-
-  </div>
-
-</section>
-
-<section
-  id="contact"
-  class="section contact"
->
-
-  <div class="container">
-
-    <p class="eyebrow">
-      CONTACT
-    </p>
-
-    <h2>
-      Let's build something.
-    </h2>
-
-    <button
-      id="contactButton"
-      class="primary-button"
-      type="button"
-    >
-      Get Started
-    </button>
-
-  </div>
-
-</section>
-
-</main>
-
-<footer>
-  <div class="container">
-    Built with AURA ✦
-  </div>
-</footer>
-
-<script
-  src="./script.js"
-></script>
-
-</body>
-</html>`;
-
-  const styleCss =
-`* {
-  box-sizing: border-box;
-}
-
-html {
-  scroll-behavior: smooth;
-}
-
-body {
-  margin: 0;
-
-  font-family:
-    Inter,
-    system-ui,
-    -apple-system,
-    BlinkMacSystemFont,
-    "Segoe UI",
-    sans-serif;
-
-  background: #070b12;
-  color: #ffffff;
-}
-
-a {
-  color: inherit;
-  text-decoration: none;
-}
-
-button {
-  font: inherit;
-}
-
-.container {
-  width:
-    min(
-      1120px,
-      calc(100% - 40px)
-    );
-
-  margin:
-    0 auto;
-}
-
-.site-header {
-  position: sticky;
-  top: 0;
-  z-index: 50;
-
-  background:
-    rgba(
-      7,
-      11,
-      18,
-      0.86
-    );
-
-  backdrop-filter:
-    blur(18px);
-
-  border-bottom:
-    1px solid
-    rgba(
-      255,
-      255,
-      255,
-      0.08
-    );
-}
-
-.nav {
-  min-height: 72px;
-
-  display:
-    flex;
-
-  align-items:
-    center;
-
-  justify-content:
-    space-between;
-}
-
-.logo {
-  font-weight: 900;
-  letter-spacing: 2px;
-}
-
-.nav-links {
-  display:
-    flex;
-
-  gap:
-    24px;
-}
-
-.nav-links a {
-  color:
-    #aeb7c8;
-}
-
-.menu-button {
-  display:
-    none;
-
-  border:
-    0;
-
-  background:
-    transparent;
-
-  color:
-    #ffffff;
-}
-
-.hero {
-  min-height:
-    82vh;
-
-  display:
-    flex;
-
-  align-items:
-    center;
-
-  background:
-    radial-gradient(
-      circle at 50% 0%,
-      rgba(
-        99,
-        102,
-        241,
-        0.24
-      ),
-      transparent 50%
-    );
-}
-
-.hero-inner {
-  padding:
-    100px 0;
-}
-
-.eyebrow {
-  color:
-    #8da2ff;
-
-  font-size:
-    12px;
-
-  font-weight:
-    800;
-
-  letter-spacing:
-    2px;
-}
-
-h1 {
-  max-width:
-    900px;
-
-  margin:
-    18px 0;
-
-  font-size:
-    clamp(
-      52px,
-      9vw,
-      104px
-    );
-
-  line-height:
-    0.95;
-
-  letter-spacing:
-    -0.06em;
-}
-
-h1 span {
-  display:
-    block;
-
-  color:
-    #8da2ff;
-}
-
-.hero-copy {
-  max-width:
-    680px;
-
-  color:
-    #aeb7c8;
-
-  font-size:
-    19px;
-
-  line-height:
-    1.7;
-}
-
-.primary-button {
-  display:
-    inline-flex;
-
-  align-items:
-    center;
-
-  justify-content:
-    center;
-
-  min-height:
-    48px;
-
-  padding:
-    0 22px;
-
-  margin-top:
-    24px;
-
-  border:
-    0;
-
-  border-radius:
-    12px;
-
-  background:
-    #ffffff;
-
-  color:
-    #070b12;
-
-  font-weight:
-    800;
-
-  cursor:
-    pointer;
-}
-
-.section {
-  padding:
-    100px 0;
-
-  border-top:
-    1px solid
-    rgba(
-      255,
-      255,
-      255,
-      0.07
-    );
-}
-
-.section h2,
-.contact h2 {
-  margin:
-    16px 0 0;
-
-  font-size:
-    clamp(
-      36px,
-      6vw,
-      64px
-    );
-
-  line-height:
-    1;
-}
-
-.cards {
-  margin-top:
-    50px;
-
-  display:
-    grid;
-
-  grid-template-columns:
-    repeat(
-      3,
-      minmax(
-        0,
-        1fr
-      )
-    );
-
-  gap:
-    20px;
-}
-
-.card {
-  padding:
-    30px;
-
-  min-height:
-    220px;
-
-  border:
-    1px solid
-    rgba(
-      255,
-      255,
-      255,
-      0.08
-    );
-
-  border-radius:
-    22px;
-
-  background:
-    rgba(
-      255,
-      255,
-      255,
-      0.035
-    );
-}
-
-.card-number {
-  color:
-    #8da2ff;
-
-  font-weight:
-    900;
-
-  display:
-    block;
-
-  margin-bottom:
-    34px;
-}
-
-.card h3 {
-  font-size:
-    24px;
-}
-
-.card p {
-  color:
-    #aeb7c8;
-}
-
-.contact {
-  text-align:
-    center;
-}
-
-footer {
-  padding:
-    30px 0;
-
-  color:
-    #697386;
-
-  text-align:
-    center;
-
-  border-top:
-    1px solid
-    rgba(
-      255,
-      255,
-      255,
-      0.07
-    );
-}
-
-@media (
-  max-width: 720px
-) {
-  .nav-links {
-    display:
-      none;
-  }
-
-  .menu-button {
-    display:
-      block;
-  }
-
-  .cards {
-    grid-template-columns:
-      1fr;
-  }
-}`;
-
-  const scriptJs =
-`document.addEventListener(
-  "DOMContentLoaded",
-  () => {
-    const contactButton =
-      document.getElementById(
-        "contactButton"
-      );
-
-    if (contactButton) {
-      contactButton.addEventListener(
-        "click",
-        () => {
-          alert(
-            "Thanks for getting started!"
-          );
-        }
-      );
-    }
-
-    const menuButton =
-      document.getElementById(
-        "menuButton"
-      );
-
-    if (menuButton) {
-      menuButton.addEventListener(
-        "click",
-        () => {
-          const nav =
-            document.querySelector(
-              ".nav-links"
-            );
-
-          if (nav) {
-            nav.classList.toggle(
-              "mobile-open"
-            );
-          }
-        }
-      );
-    }
-  }
-);`;
-
-  return {
-    "index.html":
-      indexHtml,
-
-    "style.css":
-      styleCss,
-
-    "script.js":
-      scriptJs
-  };
-}
-
-// ============================================================
-// AI REVIEWER
+// REVIEW APP
 // ============================================================
 
 async function reviewApplication(
-  userRequest,
+  request,
   specification,
   files
 ) {
   const prompt = `
-You are AURA's senior frontend QA engineer.
+Act as a senior frontend QA engineer.
 
-Review this COMPLETE application against the user's original request.
+Review this complete website against the ORIGINAL user request.
 
 ORIGINAL REQUEST:
-${String(
-  userRequest
-).slice(
-  0,
-  18000
-)}
+${String(request).slice(0, 14000)}
 
 REQUIREMENTS:
 ${JSON.stringify(
@@ -2077,89 +1177,65 @@ ${JSON.stringify(
   2
 )}
 
-INDEX.HTML:
+HTML:
 ${files["index.html"]}
 
-STYLE.CSS:
+CSS:
 ${files["style.css"]}
 
-SCRIPT.JS:
+JAVASCRIPT:
 ${files["script.js"]}
 
-Return ONLY JSON:
+Check especially:
+- exact product data
+- exact product count
+- search
+- cart
+- quantity controls
+- remove
+- subtotal
+- shipping
+- grand total
+- checkout
+- card validation
+- expiry validation
+- localStorage
+- order history
+- stock updates
+- working buttons
+- responsive layout
+- requested visual design
+
+Return ONLY:
 
 {
   "passed": true,
   "score": 100,
-  "missingRequirements": [],
-  "brokenFeatures": [],
-  "designProblems": [],
-  "repairNeeded": false,
+  "issues": [],
+  "repairFile": "none",
   "repairInstructions": []
 }
-
-Be strict.
-
-Check:
-
-- exact branding
-- exact text
-- exact product count
-- exact product data
-- search
-- cart
-- cart count
-- quantity
-- remove
-- subtotal
-- shipping
-- total
-- checkout
-- card validation
-- payment validation
-- stock management
-- localStorage
-- order history
-- navigation
-- responsive design
-- button behavior
-- missing IDs
-- missing selectors
-- broken functions
-- missing script references
-- invalid JavaScript
-- React/JSX
-- Vite
-- npm
-
-Do not invent requirements.
 `;
 
   const response =
     await askAI(
       [
         {
-          role:
-            "system",
-
+          role: "system",
           content:
-            "You are a strict senior frontend QA engineer. Return JSON only."
+            "You are a senior frontend QA engineer. Return JSON only."
         },
-
         {
-          role:
-            "user",
-
+          role: "user",
           content:
             prompt
         }
       ],
       {
-        temperature:
-          0.1,
-
-        max_tokens:
-          9000
+        temperature: 0.1,
+        max_tokens: 5000,
+        timeoutMs:
+          REVIEW_TIMEOUT_MS
       }
     );
 
@@ -2169,27 +1245,21 @@ Do not invent requirements.
 }
 
 // ============================================================
-// REPAIRER
+// REPAIR ONE FILE ONLY
 // ============================================================
 
-async function repairApplication(
-  userRequest,
+async function repairFile(
+  file,
+  request,
   specification,
   files,
   review
 ) {
   const prompt = `
-You are AURA's senior frontend repair engineer.
+Repair ONLY ${file} in this frontend application.
 
-Repair the COMPLETE application.
-
-ORIGINAL USER REQUEST:
-${String(
-  userRequest
-).slice(
-  0,
-  18000
-)}
+ORIGINAL REQUEST:
+${String(request).slice(0, 14000)}
 
 REQUIREMENTS:
 ${JSON.stringify(
@@ -2205,163 +1275,584 @@ ${JSON.stringify(
   2
 )}
 
-CURRENT INDEX.HTML:
+CURRENT ${file}:
+${files[file]}
+
+OTHER FILES FOR COMPATIBILITY:
+
+index.html:
 ${files["index.html"]}
 
-CURRENT STYLE.CSS:
+style.css:
 ${files["style.css"]}
 
-CURRENT SCRIPT.JS:
+script.js:
 ${files["script.js"]}
 
-Repair EVERY identified issue.
-
-Do not remove existing working features.
-
-Do not replace real features with placeholders.
-
-Keep exact user data.
-
-Keep exact branding.
-
-Keep the interface polished.
-
-Keep responsive behavior.
-
-Use only HTML/CSS/vanilla JavaScript.
-
-No React.
-
-No JSX.
-
-No Vite.
-
-No npm.
-
-No package.json.
-
-No backend.
-
-No AI metadata.
-
-Return ONLY JSON:
-
-{
-  "index.html": "...",
-  "style.css": "...",
-  "script.js": "..."
-}
+Rules:
+- preserve working functionality
+- fix all listed issues
+- keep exact user requirements
+- vanilla HTML/CSS/JS only
+- no React
+- no Vite
+- no npm
+- no package.json
+- return ONLY the repaired ${file}
+- no markdown
+- no explanation
 `;
 
   const response =
     await askAI(
       [
         {
-          role:
-            "system",
-
+          role: "system",
           content:
-            "You are a senior frontend repair engineer. Return JSON only."
+            "Return only repaired source code."
         },
-
         {
-          role:
-            "user",
-
+          role: "user",
           content:
             prompt
         }
       ],
       {
-        temperature:
-          0.15,
-
+        temperature: 0.15,
         max_tokens:
-          30000
+          file === "script.js"
+            ? 11000
+            : 8000,
+        timeoutMs:
+          AI_TIMEOUT_MS
       }
     );
 
-  const result =
-    extractJson(
-      response
+  return cleanCodeOutput(
+    response
+  );
+}
+
+// ============================================================
+// SAFE FALLBACK
+// ============================================================
+
+function fallbackFiles(
+  request
+) {
+  const safe =
+    escapeHtml(
+      request
     );
 
-  const required = [
-    "index.html",
-    "style.css",
-    "script.js"
-  ];
+  return {
+    "index.html":
+`<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AURA Website</title>
+<link rel="stylesheet" href="./style.css">
+</head>
+<body>
+
+<header class="header">
+  <div class="container nav">
+    <a href="#" class="logo">AURA</a>
+
+    <nav>
+      <a href="#home">Home</a>
+      <a href="#about">About</a>
+    </nav>
+  </div>
+</header>
+
+<main>
+
+<section id="home" class="hero">
+  <div class="container">
+    <span class="eyebrow">AURA</span>
+
+    <h1>
+      Your idea.
+      <span>Your website.</span>
+    </h1>
+
+    <p>${safe}</p>
+
+    <a href="#about" class="button">
+      Explore
+    </a>
+  </div>
+</section>
+
+<section id="about" class="section">
+  <div class="container">
+    <span class="eyebrow">ABOUT</span>
+
+    <h2>
+      Built with AURA.
+    </h2>
+
+    <p>
+      A modern responsive website generated by AURA.
+    </p>
+  </div>
+</section>
+
+</main>
+
+<footer>
+  Built with AURA ✦
+</footer>
+
+<script src="./script.js"></script>
+</body>
+</html>`,
+
+    "style.css":
+`* {
+  box-sizing: border-box;
+}
+
+html {
+  scroll-behavior: smooth;
+}
+
+body {
+  margin: 0;
+  font-family: Inter, system-ui, sans-serif;
+  background: #080b12;
+  color: white;
+}
+
+a {
+  color: inherit;
+  text-decoration: none;
+}
+
+.container {
+  width: min(1120px, calc(100% - 40px));
+  margin: auto;
+}
+
+.header {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  background: rgba(8, 11, 18, .9);
+  border-bottom: 1px solid rgba(255,255,255,.08);
+}
+
+.nav {
+  min-height: 72px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.logo {
+  font-size: 22px;
+  font-weight: 900;
+  letter-spacing: 2px;
+}
+
+nav {
+  display: flex;
+  gap: 24px;
+}
+
+nav a {
+  color: #b6c0d1;
+}
+
+.hero {
+  min-height: 85vh;
+  display: flex;
+  align-items: center;
+}
+
+.hero h1 {
+  max-width: 900px;
+  margin: 20px 0;
+  font-size: clamp(52px, 8vw, 100px);
+  line-height: .95;
+  letter-spacing: -.06em;
+}
+
+.hero h1 span {
+  display: block;
+  color: #8da2ff;
+}
+
+.hero p {
+  max-width: 650px;
+  color: #b6c0d1;
+  line-height: 1.7;
+  font-size: 18px;
+}
+
+.eyebrow {
+  color: #8da2ff;
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 2px;
+}
+
+.button {
+  display: inline-block;
+  margin-top: 25px;
+  padding: 14px 22px;
+  border-radius: 12px;
+  background: white;
+  color: #080b12;
+  font-weight: 800;
+}
+
+.section {
+  padding: 100px 0;
+  border-top: 1px solid rgba(255,255,255,.08);
+}
+
+.section h2 {
+  font-size: clamp(38px, 6vw, 64px);
+}
+
+.section p {
+  color: #b6c0d1;
+}
+
+footer {
+  padding: 30px;
+  text-align: center;
+  color: #667085;
+  border-top: 1px solid rgba(255,255,255,.08);
+}
+
+@media (max-width: 700px) {
+  nav {
+    display: none;
+  }
+}`,
+
+    "script.js":
+`document.addEventListener("DOMContentLoaded", () => {
+  console.log("AURA website ready.");
+});`
+  };
+}
+
+// ============================================================
+// GENERATE COMPLETE WEBSITE
+// ============================================================
+
+async function generateFrontendFiles({
+  projectRoot,
+  projectName,
+  userRequest
+}) {
+  console.log("");
+  console.log(
+    "=========================================="
+  );
+  console.log(
+    "🎨 AURA STATIC APP GENERATION"
+  );
+  console.log(
+    "=========================================="
+  );
+
+  let specification;
+
+  try {
+    console.log(
+      "🧠 Step 1 — analyzing requirements..."
+    );
+
+    specification =
+      await analyzeRequirements(
+        userRequest
+      );
+
+    console.log(
+      "✅ Requirements analyzed."
+    );
+  } catch (error) {
+    console.log(
+      "⚠️ Requirement analysis fallback:"
+    );
+
+    console.log(
+      safeError(error)
+    );
+
+    specification =
+      fallbackRequirements(
+        userRequest
+      );
+  }
+
+  const files = {
+    "index.html": "",
+    "style.css": "",
+    "script.js": ""
+  };
+
+  // ==========================================================
+  // FILE 1 — HTML
+  // ==========================================================
+
+  console.log(
+    "💻 Generating index.html..."
+  );
+
+  try {
+    files["index.html"] =
+      await generateSingleFile(
+        "index.html",
+        userRequest,
+        specification,
+        files
+      );
+
+    console.log(
+      "✅ index.html ready."
+    );
+  } catch (error) {
+    console.log(
+      `⚠️ index.html failed: ${safeError(
+        error
+      )}`
+    );
+  }
+
+  // ==========================================================
+  // FILE 2 — CSS
+  // ==========================================================
+
+  console.log(
+    "🎨 Generating style.css..."
+  );
+
+  try {
+    files["style.css"] =
+      await generateSingleFile(
+        "style.css",
+        userRequest,
+        specification,
+        files
+      );
+
+    console.log(
+      "✅ style.css ready."
+    );
+  } catch (error) {
+    console.log(
+      `⚠️ style.css failed: ${safeError(
+        error
+      )}`
+    );
+  }
+
+  // ==========================================================
+  // FILE 3 — JAVASCRIPT
+  // ==========================================================
+
+  console.log(
+    "⚙️ Generating script.js..."
+  );
+
+  try {
+    files["script.js"] =
+      await generateSingleFile(
+        "script.js",
+        userRequest,
+        specification,
+        files
+      );
+
+    console.log(
+      "✅ script.js ready."
+    );
+  } catch (error) {
+    console.log(
+      `⚠️ script.js failed: ${safeError(
+        error
+      )}`
+    );
+  }
+
+  // ==========================================================
+  // FALLBACK MISSING FILES
+  // ==========================================================
+
+  const fallback =
+    fallbackFiles(
+      userRequest
+    );
 
   for (
-    const file of required
+    const file of [
+      "index.html",
+      "style.css",
+      "script.js"
+    ]
   ) {
     if (
-      typeof result[file] !==
-        "string" ||
-      !result[file].trim()
+      !files[file] ||
+      !files[file].trim()
     ) {
-      throw new Error(
-        `Repair response missing ${file}.`
+      files[file] =
+        fallback[file];
+
+      console.log(
+        `🛠️ Fallback used for ${file}`
       );
     }
   }
 
-  return {
-    "index.html":
-      result[
-        "index.html"
-      ],
+  // ==========================================================
+  // REVIEW
+  // ==========================================================
 
-    "style.css":
-      result[
-        "style.css"
-      ],
+  let review = null;
 
-    "script.js":
-      result[
+  try {
+    console.log(
+      "🔍 Reviewing application..."
+    );
+
+    review =
+      await reviewApplication(
+        userRequest,
+        specification,
+        files
+      );
+
+    console.log(
+      `📊 Review score: ${
+        review.score ?? "N/A"
+      }`
+    );
+  } catch (error) {
+    console.log(
+      `⚠️ Review unavailable: ${safeError(
+        error
+      )}`
+    );
+  }
+
+  // ==========================================================
+  // REPAIR
+  // ==========================================================
+
+  if (
+    review &&
+    (
+      review.repairNeeded === true ||
+      review.passed === false
+    )
+  ) {
+    const repairFileName =
+      [
+        "index.html",
+        "style.css",
         "script.js"
-      ]
-  };
-}
+      ].includes(
+        review.repairFile
+      )
+        ? review.repairFile
+        : null;
 
-// ============================================================
-// COMPLETE APPLICATION VALIDATION
-// ============================================================
+    if (repairFileName) {
+      try {
+        console.log(
+          `🔧 Repairing ${repairFileName}...`
+        );
 
-function validateApplication(
-  files
-) {
-  const errors = [];
+        files[
+          repairFileName
+        ] =
+          await repairFile(
+            repairFileName,
+            userRequest,
+            specification,
+            files,
+            review
+          );
 
-  const staticResult =
-    validateStaticFiles(
+        console.log(
+          `✅ ${repairFileName} repaired.`
+        );
+      } catch (error) {
+        console.log(
+          `⚠️ Repair failed: ${safeError(
+            error
+          )}`
+        );
+      }
+    }
+  }
+
+  // ==========================================================
+  // FINAL VALIDATION
+  // ==========================================================
+
+  let validation =
+    validateFiles(
       files
     );
 
   if (
-    !staticResult.valid
+    !validation.valid
   ) {
-    errors.push(
-      ...staticResult.errors
+    console.log(
+      "⚠️ Final validation failed:"
     );
+
+    console.log(
+      validation.errors
+    );
+
+    /*
+     * Do not replace the entire website with the fallback
+     * just because one generated file has a static issue.
+     *
+     * We only fallback missing/empty files.
+     */
+
+    const fallback2 =
+      fallbackFiles(
+        userRequest
+      );
+
+    for (
+      const file of [
+        "index.html",
+        "style.css",
+        "script.js"
+      ]
+    ) {
+      if (
+        !files[file] ||
+        !files[file].trim()
+      ) {
+        files[file] =
+          fallback2[file];
+      }
+    }
+
+    validation =
+      validateFiles(
+        files
+      );
   }
 
-  return {
-    success:
-      errors.length === 0,
+  // ==========================================================
+  // WRITE FILES
+  // ==========================================================
 
-    errors
-  };
-}
-
-// ============================================================
-// WRITE COMPLETE APP
-// ============================================================
-
-function writeApplication(
-  projectRoot,
-  files
-) {
   writeProjectFile(
     projectRoot,
     "index.html",
@@ -2379,274 +1870,14 @@ function writeApplication(
     "script.js",
     files["script.js"]
   );
-}
-
-// ============================================================
-// GENERATE FRONTEND
-// ============================================================
-
-async function generateFrontendFiles({
-  projectRoot,
-  projectName,
-  userRequest
-}) {
-  console.log("");
-  console.log(
-    "=========================================="
-  );
 
   console.log(
-    "🎨 WHOLE APPLICATION GENERATION"
-  );
-
-  console.log(
-    "=========================================="
-  );
-
-  let specification;
-
-  try {
-    console.log(
-      "🧠 Analyzing requirements..."
-    );
-
-    specification =
-      await analyzeRequirements(
-        userRequest
-      );
-
-    console.log(
-      "✅ Requirements analyzed."
-    );
-  } catch (
-    error
-  ) {
-    console.log(
-      "⚠️ Requirements analysis failed."
-    );
-
-    console.log(
-      safeError(error)
-    );
-
-    specification =
-      fallbackRequirements(
-        userRequest
-      );
-  }
-
-  let files;
-
-  try {
-    console.log(
-      "💻 Generating complete application..."
-    );
-
-    files =
-      await generateCompleteApplication(
-        userRequest,
-        specification,
-        projectName
-      );
-
-    console.log(
-      "✅ Complete application generated."
-    );
-  } catch (
-    error
-  ) {
-    console.log(
-      "⚠️ Complete generation failed."
-    );
-
-    console.log(
-      safeError(error)
-    );
-
-    console.log(
-      "🛠️ Using fallback application."
-    );
-
-    files =
-      fallbackFiles(
-        userRequest
-      );
-  }
-
-  // =========================================================
-  // REVIEW + REPAIR
-  // =========================================================
-
-  let reviewPassed =
-    false;
-
-  let repairAttempts =
-    0;
-
-  for (
-    let attempt = 0;
-    attempt <=
-      MAX_REVIEW_REPAIRS;
-    attempt++
-  ) {
-    const staticValidation =
-      validateApplication(
-        files
-      );
-
-    if (
-      !staticValidation.success
-    ) {
-      console.log(
-        "⚠️ Static validation issues:"
-      );
-
-      console.log(
-        staticValidation.errors
-      );
-    }
-
-    try {
-      console.log(
-        `🔍 Reviewing application (${attempt + 1}/${MAX_REVIEW_REPAIRS + 1})...`
-      );
-
-      const review =
-        await reviewApplication(
-          userRequest,
-          specification,
-          files
-        );
-
-      console.log(
-        `📊 Review score: ${
-          review.score ?? "N/A"
-        }`
-      );
-
-      const valid =
-        staticValidation.success;
-
-      const aiPassed =
-        review.passed === true &&
-        review.repairNeeded !==
-          true;
-
-      if (
-        valid &&
-        aiPassed
-      ) {
-        console.log(
-          "✅ Application review passed."
-        );
-
-        reviewPassed =
-          true;
-
-        break;
-      }
-
-      if (
-        attempt >=
-        MAX_REVIEW_REPAIRS
-      ) {
-        break;
-      }
-
-      console.log(
-        "🔧 Repairing application..."
-      );
-
-      files =
-        await repairApplication(
-          userRequest,
-          specification,
-          files,
-          review
-        );
-
-      repairAttempts++;
-
-      console.log(
-        "✅ Application repaired."
-      );
-    } catch (
-      error
-    ) {
-      console.log(
-        "⚠️ Review/repair unavailable:"
-      );
-
-      console.log(
-        safeError(error)
-      );
-
-      /*
-       * If static structure is valid,
-       * don't destroy the generated app
-       * because the reviewer hit a rate limit.
-       */
-
-      if (
-        validateApplication(
-          files
-        ).success
-      ) {
-        reviewPassed =
-          true;
-
-        break;
-      }
-    }
-  }
-
-  // =========================================================
-  // FINAL VALIDATION
-  // =========================================================
-
-  let finalValidation =
-    validateApplication(
-      files
-    );
-
-  if (
-    !finalValidation.success
-  ) {
-    console.log(
-      "⚠️ Final validation failed."
-    );
-
-    console.log(
-      finalValidation.errors
-    );
-
-    console.log(
-      "🛠️ Using fallback application."
-    );
-
-    files =
-      fallbackFiles(
-        userRequest
-      );
-
-    finalValidation =
-      validateApplication(
-        files
-      );
-  }
-
-  writeApplication(
-    projectRoot,
-    files
-  );
-
-  console.log(
-    "✅ Website files written."
+    "✅ Website generation completed."
   );
 
   return {
     success:
-      finalValidation.success,
+      validation.valid,
 
     projectRoot,
 
@@ -2660,32 +1891,19 @@ async function generateFrontendFiles({
 
     specification,
 
-    reviewPassed,
+    review,
 
-    repairAttempts
+    validation
   };
 }
 
 // ============================================================
-// VERIFY FRONTEND
+// VERIFY
 // ============================================================
 
 function verifyFrontend(
   projectRoot
 ) {
-  console.log("");
-  console.log(
-    "=========================================="
-  );
-
-  console.log(
-    "🔐 STATIC WEBSITE VERIFICATION"
-  );
-
-  console.log(
-    "=========================================="
-  );
-
   const files = {
     "index.html":
       readProjectFile(
@@ -2707,24 +1925,30 @@ function verifyFrontend(
   };
 
   const validation =
-    validateApplication(
+    validateFiles(
       files
     );
 
   const errors =
-    [...validation.errors];
+    [
+      ...validation.errors
+    ];
 
-  const allFiles =
+  const projectFiles =
     listProjectFiles(
       projectRoot
     );
 
   for (
-    const file of allFiles
+    const file of projectFiles
   ) {
     if (
-      file.endsWith(".jsx") ||
-      file.endsWith(".tsx")
+      file.endsWith(
+        ".jsx"
+      ) ||
+      file.endsWith(
+        ".tsx"
+      )
     ) {
       errors.push(
         `React file found: ${file}`
@@ -2732,7 +1956,8 @@ function verifyFrontend(
     }
 
     if (
-      file === "package.json" ||
+      file ===
+        "package.json" ||
       file.endsWith(
         "package-lock.json"
       )
@@ -2743,7 +1968,9 @@ function verifyFrontend(
     }
 
     if (
-      file.startsWith(".env")
+      file.startsWith(
+        ".env"
+      )
     ) {
       errors.push(
         `Environment file found: ${file}`
@@ -2751,61 +1978,26 @@ function verifyFrontend(
     }
   }
 
-  if (
-    errors.length > 0
-  ) {
-    console.log(
-      "❌ Verification failed."
-    );
-
-    console.log(
-      errors
-    );
-
-    return {
-      success:
-        false,
-
-      errors,
-
-      warnings: []
-    };
-  }
-
-  console.log(
-    "✅ Static website verified."
-  );
-
   return {
     success:
-      true,
+      errors.length === 0,
 
-    errors: [],
+    errors,
 
     warnings: []
   };
 }
 
 // ============================================================
-// SHA1
+// VERCEL
 // ============================================================
 
 function sha1(buffer) {
   return crypto
-    .createHash(
-      "sha1"
-    )
-    .update(
-      buffer
-    )
-    .digest(
-      "hex"
-    );
+    .createHash("sha1")
+    .update(buffer)
+    .digest("hex");
 }
-
-// ============================================================
-// VERCEL REQUEST
-// ============================================================
 
 async function vercelRequest(
   url,
@@ -2836,14 +2028,11 @@ async function vercelRequest(
   try {
     data =
       text
-        ? JSON.parse(
-            text
-          )
+        ? JSON.parse(text)
         : {};
   } catch {
     data = {
-      raw:
-        text
+      raw: text
     };
   }
 
@@ -2862,25 +2051,18 @@ async function vercelRequest(
   return data;
 }
 
-// ============================================================
-// VERCEL FILE UPLOAD
-// ============================================================
-
 async function uploadVercelFile(
   token,
   buffer
 ) {
   const digest =
-    sha1(
-      buffer
-    );
+    sha1(buffer);
 
   const response =
     await fetch(
       "https://api.vercel.com/v2/files",
       {
-        method:
-          "POST",
+        method: "POST",
 
         headers: {
           Authorization:
@@ -2890,9 +2072,7 @@ async function uploadVercelFile(
             "application/octet-stream",
 
           "Content-Length":
-            String(
-              buffer.length
-            ),
+            String(buffer.length),
 
           "x-vercel-digest":
             digest
@@ -2910,25 +2090,19 @@ async function uploadVercelFile(
     !response.ok
   ) {
     throw new Error(
-      `Vercel file upload failed (${response.status}): ${text.slice(
+      `Vercel file upload ${response.status}: ${text.slice(
         0,
-        2000
+        1500
       )}`
     );
   }
 
   return {
-    sha:
-      digest,
-
+    sha: digest,
     size:
       buffer.length
   };
 }
-
-// ============================================================
-// DEPLOY TO VERCEL
-// ============================================================
 
 async function deployToVercel(
   projectRoot,
@@ -2936,61 +2110,33 @@ async function deployToVercel(
   accessToken,
   teamId = null
 ) {
-  console.log("");
-  console.log(
-    "=========================================="
-  );
-
-  console.log(
-    "🚀 VERCEL DEPLOYMENT"
-  );
-
-  console.log(
-    "=========================================="
-  );
-
-  if (
-    !accessToken
-  ) {
+  if (!accessToken) {
     return {
-      success:
-        false,
-
+      success: false,
       reason:
-        "No Vercel access token."
+        "Vercel account is not connected."
     };
   }
 
   if (
     !projectRoot ||
-    !fs.existsSync(
-      projectRoot
-    )
+    !fs.existsSync(projectRoot)
   ) {
     return {
-      success:
-        false,
-
+      success: false,
       reason:
         "Generated project directory does not exist."
     };
   }
 
-  const safeProjectName =
-    sanitizeProjectName(
-      projectName
-    );
-
-  const requiredFiles = [
-    "index.html",
-    "style.css",
-    "script.js"
-  ];
-
   const files = [];
 
   for (
-    const file of requiredFiles
+    const file of [
+      "index.html",
+      "style.css",
+      "script.js"
+    ]
   ) {
     const fullPath =
       path.join(
@@ -3013,10 +2159,6 @@ async function deployToVercel(
         fullPath
       );
 
-    console.log(
-      `☁️ Uploading ${file}...`
-    );
-
     const uploaded =
       await uploadVercelFile(
         accessToken,
@@ -3025,8 +2167,10 @@ async function deployToVercel(
 
     files.push({
       file,
+
       sha:
         uploaded.sha,
+
       size:
         uploaded.size
     });
@@ -3034,7 +2178,9 @@ async function deployToVercel(
 
   const payload = {
     name:
-      safeProjectName,
+      sanitizeProjectName(
+        projectName
+      ),
 
     files,
 
@@ -3050,18 +2196,12 @@ async function deployToVercel(
   let endpoint =
     "https://api.vercel.com/v13/deployments";
 
-  if (
-    teamId
-  ) {
+  if (teamId) {
     endpoint +=
       `?teamId=${encodeURIComponent(
         teamId
       )}`;
   }
-
-  console.log(
-    `🚀 Creating Vercel deployment: ${safeProjectName}`
-  );
 
   const deployment =
     await vercelRequest(
@@ -3083,29 +2223,22 @@ async function deployToVercel(
       }
     );
 
-  const deploymentUrl =
+  const url =
     deployment?.url
       ? `https://${deployment.url}`
       : null;
 
-  if (
-    !deploymentUrl
-  ) {
+  if (!url) {
     throw new Error(
       "Vercel did not return a deployment URL."
     );
   }
 
-  console.log(
-    `🌐 Live URL: ${deploymentUrl}`
-  );
-
   return {
     success:
       true,
 
-    url:
-      deploymentUrl,
+    url,
 
     deploymentId:
       deployment?.id ||
@@ -3119,7 +2252,7 @@ async function deployToVercel(
 }
 
 // ============================================================
-// MAIN AGENT
+// MAIN
 // ============================================================
 
 async function runAgent(
@@ -3140,11 +2273,9 @@ async function runAgent(
   console.log(
     "=========================================="
   );
-
   console.log(
     "🤖 AURA AGENT"
   );
-
   console.log(
     "=========================================="
   );
@@ -3153,10 +2284,6 @@ async function runAgent(
     `🎯 Goal: ${request}`
   );
 
-  // ==========================================================
-  // REQUIREMENT ANALYSIS
-  // ==========================================================
-
   let specification;
 
   try {
@@ -3164,15 +2291,11 @@ async function runAgent(
       await analyzeRequirements(
         request
       );
-  } catch (
-    error
-  ) {
+  } catch (error) {
     console.log(
-      "⚠️ Requirements analysis failed."
-    );
-
-    console.log(
-      safeError(error)
+      `⚠️ Planner failed: ${safeError(
+        error
+      )}`
     );
 
     specification =
@@ -3183,7 +2306,7 @@ async function runAgent(
 
   const projectName =
     sanitizeProjectName(
-      specification?.projectName ||
+      specification.projectName ||
         deriveProjectName(
           request
         )
@@ -3194,18 +2317,6 @@ async function runAgent(
       projectName
     );
 
-  console.log(
-    `📦 Project: ${projectName}`
-  );
-
-  console.log(
-    `📍 Project root: ${projectRoot}`
-  );
-
-  // ==========================================================
-  // GENERATE
-  // ==========================================================
-
   const generation =
     await generateFrontendFiles({
       projectRoot,
@@ -3215,10 +2326,6 @@ async function runAgent(
       userRequest:
         request
     });
-
-  // ==========================================================
-  // VERIFY
-  // ==========================================================
 
   const validation =
     verifyFrontend(
@@ -3250,10 +2357,7 @@ async function runAgent(
           false,
 
         skipped:
-          true,
-
-        reason:
-          "Static website verification failed."
+          true
       },
 
       deploymentResult: {
@@ -3261,38 +2365,13 @@ async function runAgent(
           false,
 
         skipped:
-          true,
-
-        reason:
-          "Deployment blocked because validation failed."
+          true
       },
 
       liveUrl:
-        null,
-
-      repairAttempts:
-        generation.repairAttempts
+        null
     };
   }
-
-  // ==========================================================
-  // STATIC BUILD
-  // ==========================================================
-
-  const buildResult = {
-    success:
-      true,
-
-    skipped:
-      true,
-
-    reason:
-      "Static HTML/CSS/JS application requires no npm build."
-  };
-
-  // ==========================================================
-  // RETURN
-  // ==========================================================
 
   return {
     success:
@@ -3302,10 +2381,6 @@ async function runAgent(
 
     projectRoot,
 
-    /*
-     * Compatibility with server.js versions
-     * that use projectDir.
-     */
     projectDir:
       projectRoot,
 
@@ -3315,8 +2390,16 @@ async function runAgent(
     validationResult:
       validation,
 
-    buildAgentResult:
-      buildResult,
+    buildAgentResult: {
+      success:
+        true,
+
+      skipped:
+        true,
+
+      reason:
+        "Static HTML/CSS/JS requires no npm build."
+    },
 
     deploymentResult: {
       success:
@@ -3330,13 +2413,7 @@ async function runAgent(
     },
 
     liveUrl:
-      null,
-
-    repairAttempts:
-      generation.repairAttempts,
-
-    specification:
-      generation.specification
+      null
   };
 }
 
@@ -3357,13 +2434,13 @@ module.exports = {
 
   sanitizeProjectName,
 
+  listProjectFiles,
+
   redactSecrets,
 
   askAI,
 
-  validateStaticFiles,
+  escapeHtml,
 
-  listProjectFiles,
-
-  escapeHtml
+  validateFiles
 };
