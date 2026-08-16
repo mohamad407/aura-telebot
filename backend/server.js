@@ -36,7 +36,8 @@ const VERCEL_CALLBACK_URL =
 const PORT =
   Number(process.env.PORT) || 10000;
 
-const HOST = "0.0.0.0";
+const HOST =
+  "0.0.0.0";
 
 if (!BOT_TOKEN) {
   throw new Error(
@@ -45,10 +46,11 @@ if (!BOT_TOKEN) {
 }
 
 // ============================================================
-// EXPRESS
+// EXPRESS SERVER
 // ============================================================
 
-const app = express();
+const app =
+  express();
 
 app.use(
   cors({
@@ -81,102 +83,124 @@ app.use(
 );
 
 // ============================================================
-// TELEGRAM
+// TELEGRAM BOT
 // ============================================================
 
 const bot =
-  new Telegraf(BOT_TOKEN);
+  new Telegraf(
+    BOT_TOKEN
+  );
+
+// ============================================================
+// USER SESSIONS
+// ============================================================
+
+const users =
+  new Map();
+
+const oauthStates =
+  new Map();
 
 // ============================================================
 // USER SESSION
 // ============================================================
-
-const users = new Map();
-
-/*
-User session:
-
-{
-  projectName,
-  projectRoot,
-  projectDir,
-
-  siteSlug,
-  awaitingSiteSlug,
-
-  vercel: {
-    connected,
-    accessToken,
-    refreshToken,
-    expiresAt,
-    teamId,
-    configurationId
-  }
-}
-*/
 
 function getUser(userId) {
   const id =
     String(userId);
 
   if (!users.has(id)) {
-    users.set(id, {
-      userId: id,
+    users.set(
+      id,
+      {
+        userId: id,
 
-      busy: false,
+        busy: false,
 
-      projectName: null,
+        projectName: null,
 
-      projectRoot: null,
+        projectRoot: null,
 
-      projectDir: null,
+        projectDir: null,
 
-      projectFiles: [],
+        projectFiles: [],
 
-      siteSlug: null,
+        siteSlug: null,
 
-      awaitingSiteSlug: false,
+        awaitingSiteSlug: false,
 
-      vercel: {
-        connected: false,
+        vercel: {
+          connected: false,
 
-        accessToken: null,
+          accessToken: null,
 
-        refreshToken: null,
+          refreshToken: null,
 
-        expiresAt: 0,
+          expiresAt: 0,
 
-        teamId: null,
+          teamId: null,
 
-        configurationId: null,
+          configurationId: null,
 
-        user: null,
-      },
-    });
+          user: null,
+        },
+      }
+    );
   }
 
   return users.get(id);
 }
 
 // ============================================================
-// ESCAPE HELPERS
+// TELEGRAM HTML ESCAPE
 // ============================================================
 
 function escapeTelegram(value) {
   return String(value || "")
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;");
+    .replace(
+      /&/g,
+      "&amp;"
+    )
+    .replace(
+      /</g,
+      "&lt;"
+    )
+    .replace(
+      />/g,
+      "&gt;"
+    )
+    .replace(
+      /"/g,
+      "&quot;"
+    );
 }
+
+// ============================================================
+// BROWSER HTML ESCAPE
+// ============================================================
 
 function escapeHtml(value) {
   return String(value || "")
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&#039;");
+    .replace(
+      /&/g,
+      "&amp;"
+    )
+    .replace(
+      /</g,
+      "&lt;"
+    )
+    .replace(
+      />/g,
+      "&gt;"
+    )
+    .replace(
+      /"/g,
+      "&quot;"
+    )
+    .replace(
+      /'/g,
+      "&#039;"
+    );
 }
 
 // ============================================================
@@ -184,52 +208,62 @@ function escapeHtml(value) {
 // ============================================================
 
 function sanitizeSiteSlug(input) {
-  let slug = String(input || "")
-    .trim()
-    .toLowerCase();
+  let slug =
+    String(input || "")
+      .trim()
+      .toLowerCase();
 
   /*
-   * User may paste:
+   * Accept:
    *
    * asif-portfolio
    *
-   * OR:
+   * asif-portfolio.vercel.app
    *
    * https://asif-portfolio.vercel.app
-   *
-   * OR:
-   *
-   * asif-portfolio.vercel.app
    */
 
-  slug = slug
-    .replace(/^https?:\/\//i, "")
-    .replace(/^www\./i, "");
-
-  slug = slug
-    .replace(
-      /\.vercel\.app\/?.*$/i,
-      ""
-    )
-    .replace(
-      /\/.*$/g,
+  slug =
+    slug.replace(
+      /^https?:\/\//i,
       ""
     );
 
-  slug = slug
-    .replace(
+  slug =
+    slug.replace(
+      /^www\./i,
+      ""
+    );
+
+  slug =
+    slug.replace(
+      /\.vercel\.app.*$/i,
+      ""
+    );
+
+  slug =
+    slug.split("/")[0];
+
+  slug =
+    slug.replace(
       /[^a-z0-9-]+/g,
       "-"
-    )
-    .replace(
+    );
+
+  slug =
+    slug.replace(
       /-+/g,
       "-"
-    )
-    .replace(
+    );
+
+  slug =
+    slug.replace(
       /^-+/,
       ""
-    )
-    .replace(
+    );
+
+  slug =
+    slug.replace(
       /-+$/,
       ""
     );
@@ -257,15 +291,6 @@ function sanitizeSiteSlug(input) {
   return slug;
 }
 
-function isValidSiteSlug(slug) {
-  return (
-    typeof slug === "string" &&
-    /^[a-z0-9][a-z0-9-]{0,59}$/.test(
-      slug
-    )
-  );
-}
-
 // ============================================================
 // VERCEL CONFIG
 // ============================================================
@@ -279,20 +304,14 @@ function isVercelConfigured() {
 }
 
 // ============================================================
-// OAUTH STATES
+// OAUTH STATE
 // ============================================================
-
-const oauthStates = new Map();
 
 function createOAuthState() {
   return crypto
     .randomBytes(32)
     .toString("hex");
 }
-
-// ============================================================
-// VERCEL CONNECTION URL
-// ============================================================
 
 function createVercelConnectUrl(
   telegramUserId
@@ -334,15 +353,7 @@ function createVercelConnectUrl(
 // VERCEL TOKEN EXCHANGE
 // ============================================================
 
-async function exchangeVercelCode(
-  code
-) {
-  if (!isVercelConfigured()) {
-    throw new Error(
-      "Vercel credentials are missing."
-    );
-  }
-
+async function exchangeVercelCode(code) {
   const body =
     new URLSearchParams();
 
@@ -461,7 +472,7 @@ async function getVercelUser(
 // TELEGRAM KEYBOARDS
 // ============================================================
 
-function connectVercelKeyboard() {
+function connectKeyboard() {
   return Markup.inlineKeyboard([
     [
       Markup.button.callback(
@@ -483,19 +494,8 @@ function deployKeyboard() {
   ]);
 }
 
-function reconnectKeyboard() {
-  return Markup.inlineKeyboard([
-    [
-      Markup.button.callback(
-        "🔄 Reconnect Vercel",
-        "connect_vercel"
-      ),
-    ],
-  ]);
-}
-
 // ============================================================
-// RENDER HEALTH
+// ROOT
 // ============================================================
 
 app.get(
@@ -514,9 +514,10 @@ app.get(
         true,
 
       agent:
-        true,
+        typeof runAgent ===
+        "function",
 
-      vercel:
+      vercelConfigured:
         isVercelConfigured(),
 
       timestamp:
@@ -524,6 +525,10 @@ app.get(
     });
   }
 );
+
+// ============================================================
+// HEALTH
+// ============================================================
 
 app.get(
   "/health",
@@ -552,6 +557,10 @@ app.get(
     });
   }
 );
+
+// ============================================================
+// STATUS
+// ============================================================
 
 app.get(
   "/api/status",
@@ -610,7 +619,9 @@ app.post(
         "";
 
       if (
-        !String(request).trim()
+        !String(
+          request
+        ).trim()
       ) {
         return res
           .status(400)
@@ -621,9 +632,15 @@ app.post(
           });
       }
 
+      console.log(
+        "🤖 API agent request received."
+      );
+
       const result =
         await runAgent(
-          String(request)
+          String(
+            request
+          )
         );
 
       return res
@@ -662,22 +679,26 @@ app.get(
     res.send(`
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
 <meta charset="UTF-8">
+
 <meta
   name="viewport"
   content="width=device-width, initial-scale=1.0"
->
-<title>AURA Agent - EULA</title>
+/>
+
+<title>AURA Agent EULA</title>
 
 <style>
+
 body {
   margin: 0;
   padding: 40px 20px;
   font-family: Arial, sans-serif;
-  background: #080b12;
-  color: #fff;
   line-height: 1.7;
+  background: #080b12;
+  color: #ffffff;
 }
 
 main {
@@ -685,65 +706,84 @@ main {
   margin: auto;
 }
 
+h1,
+h2 {
+  color: #ffffff;
+}
+
 p {
   color: #b8c0cf;
 }
 
-h1,
-h2 {
-  color: #fff;
-}
 </style>
+
 </head>
 
 <body>
+
 <main>
 
-<h1>AURA Agent End User License Agreement</h1>
+<h1>
+AURA Agent End User License Agreement
+</h1>
 
 <p>
 Last updated: August 16, 2026
 </p>
 
-<h2>1. Acceptance</h2>
+<h2>
+1. Acceptance
+</h2>
+
 <p>
 By using AURA Agent, you agree to these terms.
 </p>
 
-<h2>2. Service</h2>
+<h2>
+2. Service
+</h2>
+
 <p>
-AURA Agent is an AI-powered Telegram service that generates
-and deploys websites.
+AURA Agent is an AI-powered Telegram service for
+creating and deploying websites.
 </p>
 
-<h2>3. Vercel</h2>
+<h2>
+3. Vercel Authorization
+</h2>
+
 <p>
-Users explicitly authorize Vercel access before deployment.
-AURA uses permissions granted by the user.
+Users authorize their Vercel account before deployment.
 </p>
 
-<h2>4. User Responsibility</h2>
+<h2>
+4. User Responsibility
+</h2>
+
 <p>
-Users are responsible for generated content and deployments.
+Users are responsible for the content and websites they create.
 </p>
 
-<h2>5. AI Content</h2>
+<h2>
+5. AI Generated Content
+</h2>
+
 <p>
-AI-generated content should be reviewed before production use.
+Users should review generated code before production use.
 </p>
 
-<h2>6. Availability</h2>
+<h2>
+6. Availability
+</h2>
+
 <p>
 AURA Agent may occasionally be unavailable.
 </p>
 
-<h2>7. Liability</h2>
-<p>
-Use of the service is subject to applicable law.
-</p>
-
 </main>
+
 </body>
+
 </html>
 `);
   }
@@ -761,22 +801,27 @@ app.get(
     res.send(`
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
+
 <meta charset="UTF-8">
+
 <meta
   name="viewport"
   content="width=device-width, initial-scale=1.0"
->
-<title>AURA Agent - Privacy</title>
+/>
+
+<title>AURA Agent Privacy</title>
 
 <style>
+
 body {
   margin: 0;
   padding: 40px 20px;
   font-family: Arial, sans-serif;
-  background: #080b12;
-  color: #fff;
   line-height: 1.7;
+  background: #080b12;
+  color: #ffffff;
 }
 
 main {
@@ -784,56 +829,69 @@ main {
   margin: auto;
 }
 
+h1,
+h2 {
+  color: #ffffff;
+}
+
 p {
   color: #b8c0cf;
 }
 
-h1,
-h2 {
-  color: #fff;
-}
 </style>
+
 </head>
 
 <body>
+
 <main>
 
-<h1>AURA Agent Privacy Policy</h1>
+<h1>
+AURA Agent Privacy Policy
+</h1>
 
 <p>
 Last updated: August 16, 2026
 </p>
 
-<h2>1. Information</h2>
+<h2>
+1. Information
+</h2>
+
 <p>
 AURA may process Telegram identifiers and website requests
-needed to provide the service.
+necessary to provide the service.
 </p>
 
-<h2>2. Vercel</h2>
+<h2>
+2. Vercel
+</h2>
+
 <p>
-When a user connects Vercel, authorization information is
-processed to perform the requested deployment.
+Vercel authorization information is processed to perform
+deployments requested by users.
 </p>
 
-<h2>3. AI Providers</h2>
+<h2>
+3. AI Providers
+</h2>
+
 <p>
-Website requests may be processed by configured AI providers
-to generate website code.
+Website prompts may be processed by configured AI providers.
 </p>
 
-<h2>4. Security</h2>
+<h2>
+4. Security
+</h2>
+
 <p>
 Credentials are handled server-side.
 </p>
 
-<h2>5. Contact</h2>
-<p>
-Contact the AURA Agent developer through the integration support contact.
-</p>
-
 </main>
+
 </body>
+
 </html>
 `);
   }
@@ -867,6 +925,16 @@ app.get(
         "=========================================="
       );
 
+      console.log(
+        "Code received:",
+        Boolean(code)
+      );
+
+      console.log(
+        "State received:",
+        Boolean(state)
+      );
+
       if (error) {
         return res
           .status(400)
@@ -886,7 +954,9 @@ padding:50px;
 text-align:center;
 ">
 
-<h1>❌ Vercel connection failed</h1>
+<h1>
+❌ Vercel connection failed
+</h1>
 
 <p>
 ${escapeHtml(
@@ -982,7 +1052,7 @@ Return to Telegram.
           tokenData.expires_in ||
             3600
         ) *
-          1000;
+        1000;
 
       session.vercel.teamId =
         teamId ||
@@ -998,12 +1068,9 @@ Return to Telegram.
           await getVercelUser(
             session.vercel.accessToken
           );
-      } catch (
-        error
-      ) {
+      } catch (error) {
         console.log(
-          "⚠️ Vercel user lookup failed:",
-          error.message
+          "⚠️ Could not retrieve Vercel profile."
         );
 
         session.vercel.user =
@@ -1018,15 +1085,11 @@ Return to Telegram.
         "Vercel account";
 
       console.log(
-        "✅ Vercel connected:"
-      );
-
-      console.log(
-        accountName
+        `✅ Vercel connected: ${accountName}`
       );
 
       // --------------------------------------------------------
-      // TELEGRAM RESPONSE
+      // TELEGRAM MESSAGE AFTER OAUTH
       // --------------------------------------------------------
 
       try {
@@ -1034,27 +1097,20 @@ Return to Telegram.
           session.projectRoot ||
           session.projectDir
         ) {
-          /*
-           * If user already created website:
-           *
-           * ask for URL name.
-           */
-
           session.awaitingSiteSlug =
             true;
 
           await bot.telegram.sendMessage(
             oauth.telegramUserId,
 
-            "✅ <b>Vercel connected</b>\n\n" +
+            "✅ <b>Vercel connected!</b>\n\n" +
               `👤 ${escapeTelegram(
                 accountName
               )}\n\n` +
-              "🌐 <b>Now choose your website address.</b>\n\n" +
-              "Type the name you want before <code>.vercel.app</code>.\n\n" +
+              "🌐 <b>Now enter your website URL name.</b>\n\n" +
               "Example:\n" +
               "<code>asif-portfolio</code>\n\n" +
-              "Then your website will be:\n" +
+              "Your website will become:\n" +
               "<code>https://asif-portfolio.vercel.app</code>",
 
             {
@@ -1066,7 +1122,7 @@ Return to Telegram.
           await bot.telegram.sendMessage(
             oauth.telegramUserId,
 
-            "✅ <b>Vercel connected</b>\n\n" +
+            "✅ <b>Vercel connected!</b>\n\n" +
               `👤 ${escapeTelegram(
                 accountName
               )}\n\n` +
@@ -1082,17 +1138,13 @@ Return to Telegram.
         telegramError
       ) {
         console.error(
-          "❌ Telegram notification failed:"
+          "❌ Telegram callback notification failed:"
         );
 
         console.error(
           telegramError
         );
       }
-
-      // --------------------------------------------------------
-      // BROWSER PAGE
-      // --------------------------------------------------------
 
       return res
         .status(200)
@@ -1102,11 +1154,12 @@ Return to Telegram.
 <html>
 
 <head>
+
 <meta charset="UTF-8">
 
 <meta
-  name="viewport"
-  content="width=device-width, initial-scale=1.0"
+name="viewport"
+content="width=device-width, initial-scale=1.0"
 />
 
 <title>AURA - Vercel Connected</title>
@@ -1139,7 +1192,6 @@ background:#111827;
 <div
 style="
 font-size:64px;
-margin-bottom:20px;
 "
 >
 ✅
@@ -1155,40 +1207,26 @@ color:#aeb7c8;
 line-height:1.7;
 "
 >
-Your Vercel account has been connected successfully.
+Your Vercel account has been connected to AURA.
 </p>
 
 <p
 style="
 color:#aeb7c8;
-line-height:1.7;
 "
 >
 Return to Telegram.
 </p>
 
-<p
-style="
-color:#667085;
-font-size:14px;
-"
->
-You can close this tab.
-</p>
-
 </div>
 
 </body>
+
 </html>
 `);
-    } catch (
-      error
-    ) {
+    } catch (error) {
       console.error(
-        "❌ Vercel callback error:"
-      );
-
-      console.error(
+        "❌ Vercel callback error:",
         error
       );
 
@@ -1198,11 +1236,6 @@ You can close this tab.
 <!DOCTYPE html>
 
 <html>
-
-<head>
-<meta charset="UTF-8">
-<title>AURA Error</title>
-</head>
 
 <body
 style="
@@ -1225,10 +1258,11 @@ ${escapeHtml(
 </p>
 
 <p>
-Return to Telegram and try again.
+Return to Telegram.
 </p>
 
 </body>
+
 </html>
 `);
     }
@@ -1249,8 +1283,8 @@ bot.start(
       "🤖 <b>AURA</b>\n\n" +
         "Tell me what you want to build.\n\n" +
         "Example:\n" +
-        "<code>Create a simple portfolio</code>\n\n" +
-        "I'll turn your idea into a live website.",
+        "<code>Create a modern Amazon-style store</code>\n\n" +
+        "I'll turn your idea into a complete website.",
 
       {
         parse_mode:
@@ -1289,11 +1323,6 @@ bot.help(
 bot.command(
   "vercel",
   async (ctx) => {
-    const session =
-      getUser(
-        ctx.from.id
-      );
-
     if (
       !isVercelConfigured()
     ) {
@@ -1312,7 +1341,7 @@ bot.command(
 
       await ctx.reply(
         "🔗 <b>Connect Vercel</b>\n\n" +
-          "Authorize your Vercel account to deploy websites with AURA.",
+          "Authorize your Vercel account so AURA can deploy your website.",
 
         {
           parse_mode:
@@ -1328,9 +1357,7 @@ bot.command(
           ]),
         }
       );
-    } catch (
-      error
-    ) {
+    } catch (error) {
       console.error(
         error
       );
@@ -1354,31 +1381,28 @@ bot.command(
         ctx.from.id
       );
 
-    let text =
-      "🤖 <b>AURA Status</b>\n\n";
-
-    text +=
-      `Website: ${
-        session.projectName ||
-        "None"
-      }\n`;
-
-    text +=
-      `URL: ${
-        session.siteSlug
-          ? `https://${session.siteSlug}.vercel.app`
-          : "Not selected"
-      }\n`;
-
-    text +=
-      `Vercel: ${
-        session.vercel.connected
-          ? "🟢 Connected"
-          : "🔴 Not connected"
-      }`;
-
     await ctx.reply(
-      text,
+      "🤖 <b>AURA Status</b>\n\n" +
+        `Website: ${
+          session.projectName ||
+          "None"
+        }\n` +
+        `URL: ${
+          session.siteSlug
+            ? `https://${session.siteSlug}.vercel.app`
+            : "Not selected"
+        }\n` +
+        `Vercel: ${
+          session.vercel.connected
+            ? "🟢 Connected"
+            : "🔴 Not connected"
+        }\n` +
+        `Generation: ${
+          session.busy
+            ? "🟡 Working"
+            : "🟢 Idle"
+        }`,
+
       {
         parse_mode:
           "HTML",
@@ -1413,8 +1437,8 @@ bot.action(
         );
 
       await ctx.reply(
-        "🔗 <b>Connect Vercel</b>\n\n" +
-          "Authorize your Vercel account.",
+        "🔐 <b>Connect Vercel</b>\n\n" +
+          "Authorize your own Vercel account.",
 
         {
           parse_mode:
@@ -1423,16 +1447,14 @@ bot.action(
           ...Markup.inlineKeyboard([
             [
               Markup.button.url(
-                "🔐 Connect Vercel",
+                "🔗 Connect Vercel",
                 url
               ),
             ],
           ]),
         }
       );
-    } catch (
-      error
-    ) {
+    } catch (error) {
       console.error(
         error
       );
@@ -1452,7 +1474,7 @@ bot.action(
   "deploy",
   async (ctx) => {
     await ctx.answerCbQuery(
-      "Deploying..."
+      "Starting deployment..."
     );
 
     const session =
@@ -1486,9 +1508,7 @@ bot.action(
       await ctx.reply(
         "🌐 <b>Enter your website URL name</b>\n\n" +
           "Example:\n" +
-          "<code>asif-portfolio</code>\n\n" +
-          "Your URL will be:\n" +
-          "<code>https://asif-portfolio.vercel.app</code>",
+          "<code>asif-portfolio</code>",
 
         {
           parse_mode:
@@ -1504,10 +1524,10 @@ bot.action(
       !session.vercel.accessToken
     ) {
       await ctx.reply(
-        "🔴 Connect your Vercel account first.",
+        "🔴 Please connect your Vercel account first.",
 
         {
-          ...connectVercelKeyboard(),
+          ...connectKeyboard(),
         }
       );
 
@@ -1518,7 +1538,7 @@ bot.action(
       session.busy
     ) {
       await ctx.reply(
-        "⏳ AURA is already processing your request."
+        "⏳ AURA is already working on your project."
       );
 
       return;
@@ -1530,7 +1550,7 @@ bot.action(
     try {
       await ctx.reply(
         "🚀 <b>Launching your website...</b>\n\n" +
-          "Preparing your live URL.",
+          "AURA is publishing it now ✨",
 
         {
           parse_mode:
@@ -1542,12 +1562,6 @@ bot.action(
         await deployToVercel(
           projectPath,
 
-          /*
-           * IMPORTANT:
-           *
-           * Use the user's desired URL name
-           * as the Vercel project name.
-           */
           session.siteSlug,
 
           session.vercel.accessToken,
@@ -1564,10 +1578,6 @@ bot.action(
             "Vercel deployment failed."
         );
       }
-
-      // --------------------------------------------------------
-      // SUCCESS MESSAGE
-      // --------------------------------------------------------
 
       await ctx.reply(
         "✨ <b>Your website has landed!</b>\n\n" +
@@ -1590,60 +1600,11 @@ bot.action(
             false,
         }
       );
-
-    } catch (
-      error
-    ) {
+    } catch (error) {
       console.error(
-        "❌ Deployment error:"
-      );
-
-      console.error(
+        "❌ Deployment error:",
         error
       );
-
-      /*
-       * Friendly conflict message.
-       */
-      const message =
-        String(
-          error?.message ||
-            ""
-        ).toLowerCase();
-
-      if (
-        message.includes(
-          "already exists"
-        ) ||
-        message.includes(
-          "name"
-        ) &&
-        message.includes(
-          "taken"
-        ) ||
-        message.includes(
-          "conflict"
-        )
-      ) {
-        await ctx.reply(
-          "⚠️ <b>That website name is already in use.</b>\n\n" +
-            `The name <code>${escapeTelegram(
-              session.siteSlug
-            )}</code> could not be used.\n\n` +
-            "Send another URL name, for example:\n" +
-            "<code>asif-portfolio-2026</code>",
-
-          {
-            parse_mode:
-              "HTML",
-          }
-        );
-
-        session.awaitingSiteSlug =
-          true;
-
-        return;
-      }
 
       await ctx.reply(
         "❌ <b>Deployment failed</b>\n\n" +
@@ -1657,7 +1618,6 @@ bot.action(
             "HTML",
         }
       );
-
     } finally {
       session.busy =
         false;
@@ -1666,7 +1626,207 @@ bot.action(
 );
 
 // ============================================================
+// BACKGROUND WEBSITE GENERATION
+// ============================================================
+//
+// IMPORTANT:
+//
+// runAgent() can take longer than Telegram's update timeout.
+//
+// So the Telegram handler starts this job and DOES NOT await it.
+//
+// ============================================================
+
+async function generateForTelegramUser(
+  telegramUserId,
+  userRequest
+) {
+  const session =
+    getUser(
+      telegramUserId
+    );
+
+  try {
+    await bot.telegram.sendMessage(
+      telegramUserId,
+
+      "🧠 <b>AURA is building your application...</b>\n\n" +
+        "Understanding your requirements ✨",
+
+      {
+        parse_mode:
+          "HTML",
+      }
+    );
+
+    console.log("");
+    console.log(
+      "=========================================="
+    );
+
+    console.log(
+      "🧠 BACKGROUND WEBSITE JOB"
+    );
+
+    console.log(
+      "=========================================="
+    );
+
+    console.log(
+      `👤 Telegram user: ${telegramUserId}`
+    );
+
+    console.log(
+      `🎯 Request: ${userRequest}`
+    );
+
+    // --------------------------------------------------------
+    // PLANNING / GENERATION
+    // --------------------------------------------------------
+
+    await bot.telegram.sendMessage(
+      telegramUserId,
+
+      "🎨 <b>Designing the application...</b>\n\n" +
+        "AURA is creating the complete user experience.",
+
+      {
+        parse_mode:
+          "HTML",
+      }
+    );
+
+    const result =
+      await runAgent(
+        userRequest
+      );
+
+    if (
+      !result ||
+      result.success === false
+    ) {
+      throw new Error(
+        "AURA could not create the website."
+      );
+    }
+
+    // --------------------------------------------------------
+    // SAVE PROJECT
+    // --------------------------------------------------------
+
+    session.projectName =
+      result.projectName ||
+      "aura-website";
+
+    session.projectRoot =
+      result.projectRoot ||
+      result.projectDir ||
+      null;
+
+    session.projectDir =
+      result.projectDir ||
+      result.projectRoot ||
+      null;
+
+    session.projectFiles =
+      result.files ||
+      [];
+
+    session.siteSlug =
+      null;
+
+    session.awaitingSiteSlug =
+      true;
+
+    console.log(
+      "✅ Background generation complete."
+    );
+
+    console.log({
+      projectName:
+        session.projectName,
+
+      projectRoot:
+        session.projectRoot,
+
+      projectDir:
+        session.projectDir,
+
+      files:
+        session.projectFiles,
+    });
+
+    // --------------------------------------------------------
+    // USER RESULT
+    // --------------------------------------------------------
+
+    await bot.telegram.sendMessage(
+      telegramUserId,
+
+      "✅ <b>Website created!</b>\n\n" +
+        `📦 <b>${escapeTelegram(
+          session.projectName
+        )}</b>\n\n` +
+        "🌐 <b>Now enter your website URL name.</b>\n\n" +
+        "Example:\n" +
+        "<code>asif-portfolio</code>\n\n" +
+        "Your final URL will be:\n" +
+        "<code>https://asif-portfolio.vercel.app</code>",
+
+      {
+        parse_mode:
+          "HTML",
+      }
+    );
+
+  } catch (error) {
+    console.error(
+      "\n❌ BACKGROUND GENERATION ERROR:"
+    );
+
+    console.error(
+      error
+    );
+
+    try {
+      await bot.telegram.sendMessage(
+        telegramUserId,
+
+        "❌ <b>I couldn't finish your website.</b>\n\n" +
+          `<code>${escapeTelegram(
+            error?.message ||
+              "Unknown error"
+          )}</code>\n\n` +
+          "You can try the request again.",
+
+        {
+          parse_mode:
+            "HTML",
+        }
+      );
+    } catch (
+      telegramError
+    ) {
+      console.error(
+        "❌ Could not send failure message:",
+        telegramError
+      );
+    }
+  } finally {
+    session.busy =
+      false;
+  }
+}
+
+// ============================================================
 // TEXT HANDLER
+// ============================================================
+//
+// IMPORTANT:
+//
+// We DO NOT await generateForTelegramUser() here.
+//
+// That prevents the Telegraf 90-second timeout.
 // ============================================================
 
 bot.on(
@@ -1695,32 +1855,24 @@ bot.on(
         ctx.from.id
       );
 
-    // ========================================================
-    // USER IS ENTERING WEBSITE URL
-    // ========================================================
+    // --------------------------------------------------------
+    // URL INPUT
+    // --------------------------------------------------------
 
     if (
       session.awaitingSiteSlug
     ) {
-      const requestedSlug =
+      const slug =
         sanitizeSiteSlug(
           text
         );
 
-      if (
-        !requestedSlug ||
-        !isValidSiteSlug(
-          requestedSlug
-        )
-      ) {
+      if (!slug) {
         await ctx.reply(
           "❌ <b>Invalid website name</b>\n\n" +
-            "Use only lowercase letters, numbers and hyphens.\n\n" +
-            "Examples:\n" +
-            "<code>asif-portfolio</code>\n" +
-            "<code>my-store</code>\n" +
-            "<code>asif-dev</code>\n\n" +
-            "Try again.",
+            "Use lowercase letters, numbers and hyphens.\n\n" +
+            "Example:\n" +
+            "<code>asif-portfolio</code>",
 
           {
             parse_mode:
@@ -1732,16 +1884,16 @@ bot.on(
       }
 
       session.siteSlug =
-        requestedSlug;
+        slug;
 
       session.awaitingSiteSlug =
         false;
 
       await ctx.reply(
-        "✨ <b>Perfect!</b>\n\n" +
+        "✨ <b>Perfect choice!</b>\n\n" +
           "Your website address will be:\n\n" +
           `<code>https://${escapeTelegram(
-            requestedSlug
+            slug
           )}.vercel.app</code>\n\n` +
           "Everything is ready.",
 
@@ -1756,152 +1908,60 @@ bot.on(
       return;
     }
 
-    // ========================================================
-    // GENERATION
-    // ========================================================
+    // --------------------------------------------------------
+    // BUSY
+    // --------------------------------------------------------
 
     if (
       session.busy
     ) {
       await ctx.reply(
-        "⏳ AURA is already working on your previous request."
+        "⏳ <b>AURA is already building your website.</b>\n\n" +
+          "You can wait for the current project to finish.",
+
+        {
+          parse_mode:
+            "HTML",
+        }
       );
 
       return;
     }
 
+    // --------------------------------------------------------
+    // START JOB
+    // --------------------------------------------------------
+
     session.busy =
       true;
 
-    try {
-      await ctx.reply(
-        "🧠 <b>AURA is creating your website...</b>\n\n" +
-          "Give me a moment ✨",
+    /*
+     * Send immediately so Telegram receives a fast response.
+     */
 
-        {
-          parse_mode:
-            "HTML",
-        }
-      );
+    await ctx.reply(
+      "🧠 <b>AURA is building your application...</b>\n\n" +
+        "This can take a little longer for complex websites.\n" +
+        "I'll message you when it's ready ✨",
 
-      const result =
-        await runAgent(
-          text
-        );
-
-      if (
-        !result ||
-        result.success === false
-      ) {
-        throw new Error(
-          "AURA could not create the website."
-        );
+      {
+        parse_mode:
+          "HTML",
       }
+    );
 
-      /*
-       * Important:
-       *
-       * Support both names because different
-       * agent versions used different property names.
-       */
+    /*
+     * IMPORTANT:
+     *
+     * No await.
+     *
+     * The job continues in the background.
+     */
 
-      session.projectName =
-        result.projectName ||
-        "aura-website";
-
-      session.projectRoot =
-        result.projectRoot ||
-        result.projectDir ||
-        null;
-
-      session.projectDir =
-        result.projectDir ||
-        result.projectRoot ||
-        null;
-
-      session.projectFiles =
-        result.files ||
-        [];
-
-      /*
-       * Reset old URL.
-       */
-      session.siteSlug =
-        null;
-
-      /*
-       * The next step after generation is
-       * URL entry.
-       */
-      session.awaitingSiteSlug =
-        true;
-
-      console.log(
-        "\n✅ PROJECT CREATED"
-      );
-
-      console.log(
-        {
-          projectName:
-            session.projectName,
-
-          projectRoot:
-            session.projectRoot,
-
-          projectDir:
-            session.projectDir,
-        }
-      );
-
-      // --------------------------------------------------------
-      // CLEAN TELEGRAM MESSAGE
-      // --------------------------------------------------------
-
-      await ctx.reply(
-        "✅ <b>Website created!</b>\n\n" +
-          `📦 <b>${escapeTelegram(
-            session.projectName
-          )}</b>\n\n` +
-          "Now tell me what you want the website URL to be.\n\n" +
-          "Example:\n" +
-          "<code>asif-portfolio</code>\n\n" +
-          "I'll make it:\n" +
-          "<code>https://asif-portfolio.vercel.app</code>",
-
-        {
-          parse_mode:
-            "HTML",
-        }
-      );
-
-    } catch (
-      error
-    ) {
-      console.error(
-        "\n❌ AURA GENERATION ERROR:"
-      );
-
-      console.error(
-        error
-      );
-
-      await ctx.reply(
-        "❌ <b>I couldn't create the website.</b>\n\n" +
-          `<code>${escapeTelegram(
-            error?.message ||
-              "Unknown error"
-          )}</code>`,
-
-        {
-          parse_mode:
-            "HTML",
-        }
-      );
-
-    } finally {
-      session.busy =
-        false;
-    }
+    void generateForTelegramUser(
+      ctx.from.id,
+      text
+    );
   }
 );
 
@@ -1912,7 +1972,7 @@ bot.on(
 bot.catch(
   (error) => {
     console.error(
-      "❌ Telegram error:"
+      "❌ Telegram bot error:"
     );
 
     console.error(
@@ -1922,7 +1982,31 @@ bot.catch(
 );
 
 // ============================================================
-// EXPRESS ERROR HANDLER
+// EXPRESS 404
+// ============================================================
+
+app.use(
+  (
+    req,
+    res
+  ) => {
+    res
+      .status(404)
+      .json({
+        success:
+          false,
+
+        error:
+          "Route not found",
+
+        path:
+          req.originalUrl,
+      });
+  }
+);
+
+// ============================================================
+// EXPRESS ERROR
 // ============================================================
 
 app.use(
@@ -1933,10 +2017,7 @@ app.use(
     next
   ) => {
     console.error(
-      "❌ Express error:"
-    );
-
-    console.error(
+      "❌ Express error:",
       error
     );
 
@@ -1962,31 +2043,7 @@ app.use(
 );
 
 // ============================================================
-// 404
-// ============================================================
-
-app.use(
-  (
-    req,
-    res
-  ) => {
-    res
-      .status(404)
-      .json({
-        success:
-          false,
-
-        error:
-          "Route not found",
-
-        path:
-          req.originalUrl,
-      });
-  }
-);
-
-// ============================================================
-// START SERVER
+// START HTTP + TELEGRAM
 // ============================================================
 
 const server =
@@ -2047,9 +2104,10 @@ const server =
           "✅ Telegram polling started."
         );
 
-      } catch (
-        error
-      ) {
+        console.log(
+          "=========================================="
+        );
+      } catch (error) {
         console.error(
           "❌ Telegram bot failed to start:"
         );
@@ -2057,6 +2115,12 @@ const server =
         console.error(
           error
         );
+
+        /*
+         * If this is 409 Conflict,
+         * another instance is already polling
+         * the same Telegram bot token.
+         */
 
         process.exit(
           1
@@ -2066,12 +2130,10 @@ const server =
   );
 
 // ============================================================
-// GRACEFUL SHUTDOWN
+// SHUTDOWN
 // ============================================================
 
-function shutdown(
-  signal
-) {
+function shutdown(signal) {
   console.log(
     `\n🛑 ${signal} received.`
   );
@@ -2080,18 +2142,12 @@ function shutdown(
     bot.stop(
       signal
     );
-  } catch (
-    error
-  ) {
-    console.error(
-      error
-    );
-  }
+  } catch {}
 
   server.close(
     () => {
       console.log(
-        "✅ HTTP server closed."
+        "✅ AURA server stopped."
       );
 
       process.exit(
@@ -2116,20 +2172,18 @@ function shutdown(
 
 process.once(
   "SIGINT",
-  () => {
+  () =>
     shutdown(
       "SIGINT"
-    );
-  }
+    )
 );
 
 process.once(
   "SIGTERM",
-  () => {
+  () =>
     shutdown(
       "SIGTERM"
-    );
-  }
+    )
 );
 
 // ============================================================
