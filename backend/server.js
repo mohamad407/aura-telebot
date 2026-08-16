@@ -13,7 +13,7 @@ const {
 const {
   runAgent,
   deployToVercel,
-} = require("./agent/agent");
+} = require("./Agent/agent");
 
 // ============================================================
 // AURA TELEGRAM BOT
