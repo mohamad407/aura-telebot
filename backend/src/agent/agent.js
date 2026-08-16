@@ -5,277 +5,1399 @@ const path = require("node:path");
 const crypto = require("node:crypto");
 
 // ============================================================
-// AURA STATIC WEBSITE AGENT
-// HTML + CSS + JAVASCRIPT ONLY
-// NO REACT
-// NO VITE
-// NO NPM BUILD
+// AURA AI APPLICATION AGENT
+// ============================================================
+//
+// Architecture:
+//
+// USER REQUEST
+//      ↓
+// REQUIREMENT ANALYSIS
+//      ↓
+// WHOLE APP GENERATION
+//      ↓
+// HTML + CSS + JAVASCRIPT
+//      ↓
+// REQUIREMENT REVIEW
+//      ↓
+// AUTOMATIC REPAIR
+//      ↓
+// STATIC VALIDATION
+//      ↓
+// READY FOR VERCEL
+//
+// Generated apps do NOT use:
+// - React
+// - JSX
+// - Vite
+// - npm
+// - package.json
+// - backend
+//
 // ============================================================
 
-const ROOT_DIR = path.resolve(__dirname, "..", "projects");
+const PROJECTS_DIR = path.resolve(
+  __dirname,
+  "../projects"
+);
 
-const DEFAULT_GROQ_MODEL =
-  process.env.GROQ_MODEL || "openai/gpt-oss-120b";
+const AI_TIMEOUT_MS = 120000;
+const MAX_REVIEW_REPAIRS = 2;
 
-const DEFAULT_OPENROUTER_MODEL =
-  process.env.OPENROUTER_MODEL || "openrouter/free";
+const GROQ_MODEL =
+  process.env.GROQ_MODEL ||
+  "openai/gpt-oss-120b";
 
-// ------------------------------------------------------------
-// Utility
-// ------------------------------------------------------------
+const OPENROUTER_MODEL =
+  process.env.OPENROUTER_MODEL ||
+  "openrouter/free";
 
-function ensureDir(dir) {
-  fs.mkdirSync(dir, { recursive: true });
+const GROQ_COOLDOWN_MS = 60000;
+const OPENROUTER_COOLDOWN_MS = 60000;
+
+let groqDisabledUntil = 0;
+let openRouterDisabledUntil = 0;
+
+// ============================================================
+// LOGGING
+// ============================================================
+
+function redactSecrets(value) {
+  let text = String(value || "");
+
+  const patterns = [
+    /TELEGRAM_BOT_TOKEN\s*=\s*[^\s]+/gi,
+    /GROQ_API_KEY\s*=\s*[^\s]+/gi,
+    /OPENROUTER_API_KEY\s*=\s*[^\s]+/gi,
+    /VERCEL_CLIENT_SECRET\s*=\s*[^\s]+/gi,
+    /VERCEL_TOKEN\s*=\s*[^\s]+/gi,
+    /Bearer\s+[A-Za-z0-9._-]+/gi,
+    /sk-[A-Za-z0-9_-]+/gi,
+    /gsk_[A-Za-z0-9_-]+/gi,
+  ];
+
+  for (const pattern of patterns) {
+    text = text.replace(
+      pattern,
+      "[REDACTED]"
+    );
+  }
+
+  return text;
 }
 
-function sanitizeProjectName(name) {
-  let value = String(name || "aura-site")
-    .toLowerCase()
+function safeError(error) {
+  return redactSecrets(
+    error?.message ||
+      String(error) ||
+      "Unknown error"
+  );
+}
+
+// ============================================================
+// PROJECT NAME
+// ============================================================
+
+function sanitizeProjectName(input) {
+  let name = String(input || "")
     .trim()
-    .replace(/[^a-z0-9-_]+/g, "-")
-    .replace(/^-+|-+$/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9_-]+/g, "-")
+    .replace(/^-+/g, "")
+    .replace(/-+$/g, "")
     .replace(/-+/g, "-");
 
-  if (!value) value = "aura-site";
-
-  if (!/^[a-z]/.test(value)) {
-    value = `site-${value}`;
+  if (!name) {
+    name = "aura-website";
   }
 
-  return value.slice(0, 50);
+  if (name.length > 60) {
+    name = name.slice(0, 60);
+  }
+
+  return name;
 }
 
-function projectDirectory(projectName) {
-  return path.join(ROOT_DIR, sanitizeProjectName(projectName));
-}
+// ============================================================
+// PROJECT PATH
+// ============================================================
 
-function writeFileSafe(filePath, content) {
-  ensureDir(path.dirname(filePath));
-  fs.writeFileSync(filePath, String(content || ""), "utf8");
-}
+function getProjectRoot(projectName) {
+  const safeName =
+    sanitizeProjectName(projectName);
 
-function readFileSafe(filePath) {
-  if (!fs.existsSync(filePath)) return "";
-  return fs.readFileSync(filePath, "utf8");
-}
-
-function sha1(content) {
-  return crypto
-    .createHash("sha1")
-    .update(Buffer.isBuffer(content) ? content : Buffer.from(content))
-    .digest("hex");
-}
-
-function redactSecrets(text) {
-  if (!text) return text;
-
-  return String(text)
-    .replace(/sk-[A-Za-z0-9_-]+/g, "[REDACTED]")
-    .replace(/gsk_[A-Za-z0-9_-]+/g, "[REDACTED]")
-    .replace(/vca_[A-Za-z0-9_-]+/g, "[REDACTED]")
-    .replace(/vcr_[A-Za-z0-9_-]+/g, "[REDACTED]")
-    .replace(
-      /(api[_-]?key|secret|token|password)\s*[:=]\s*["']?[^"',\s]+/gi,
-      "$1=[REDACTED]"
+  const projectRoot =
+    path.resolve(
+      PROJECTS_DIR,
+      safeName
     );
+
+  const projectsRoot =
+    path.resolve(
+      PROJECTS_DIR
+    );
+
+  if (
+    !projectRoot.startsWith(
+      projectsRoot + path.sep
+    )
+  ) {
+    throw new Error(
+      "Unsafe project directory."
+    );
+  }
+
+  return projectRoot;
 }
 
-function extractJson(text) {
-  if (!text) return null;
+function ensureProject(projectName) {
+  const projectRoot =
+    getProjectRoot(
+      projectName
+    );
 
-  let value = String(text).trim();
+  fs.mkdirSync(
+    projectRoot,
+    {
+      recursive: true,
+    }
+  );
 
-  // Remove markdown fences.
-  value = value
-    .replace(/^```json\s*/i, "")
-    .replace(/^```\s*/i, "")
-    .replace(/\s*```$/i, "")
-    .trim();
+  return projectRoot;
+}
+
+// ============================================================
+// FILE SECURITY
+// ============================================================
+
+function normalizeFilePath(filePath) {
+  let value =
+    String(filePath || "")
+      .replace(/\\/g, "/")
+      .trim()
+      .toLowerCase();
+
+  value =
+    value.replace(
+      /^\/+/,
+      ""
+    );
+
+  if (!value) {
+    throw new Error(
+      "Invalid file path."
+    );
+  }
+
+  if (
+    value.includes("..") ||
+    path.isAbsolute(filePath)
+  ) {
+    throw new Error(
+      `Unsafe file path: ${filePath}`
+    );
+  }
+
+  return value;
+}
+
+function writeProjectFile(
+  projectRoot,
+  filePath,
+  content
+) {
+  const safePath =
+    normalizeFilePath(
+      filePath
+    );
+
+  const fullPath =
+    path.resolve(
+      projectRoot,
+      safePath
+    );
+
+  if (
+    !fullPath.startsWith(
+      projectRoot + path.sep
+    )
+  ) {
+    throw new Error(
+      `Unsafe output path: ${safePath}`
+    );
+  }
+
+  fs.mkdirSync(
+    path.dirname(
+      fullPath
+    ),
+    {
+      recursive: true,
+    }
+  );
+
+  fs.writeFileSync(
+    fullPath,
+    String(content || ""),
+    "utf8"
+  );
+
+  console.log(
+    `📄 Created: ${safePath}`
+  );
+}
+
+function readProjectFile(
+  projectRoot,
+  filePath
+) {
+  const safePath =
+    normalizeFilePath(
+      filePath
+    );
+
+  const fullPath =
+    path.resolve(
+      projectRoot,
+      safePath
+    );
+
+  if (
+    !fs.existsSync(
+      fullPath
+    )
+  ) {
+    return null;
+  }
+
+  if (
+    !fs.statSync(
+      fullPath
+    ).isFile()
+  ) {
+    return null;
+  }
+
+  return fs.readFileSync(
+    fullPath,
+    "utf8"
+  );
+}
+
+function listProjectFiles(
+  projectRoot
+) {
+  const files = [];
+
+  function walk(directory) {
+    if (
+      !fs.existsSync(
+        directory
+      )
+    ) {
+      return;
+    }
+
+    const entries =
+      fs.readdirSync(
+        directory,
+        {
+          withFileTypes: true,
+        }
+      );
+
+    for (
+      const entry of entries
+    ) {
+      if (
+        entry.name ===
+        "node_modules"
+      ) {
+        continue;
+      }
+
+      if (
+        entry.name ===
+        ".git"
+      ) {
+        continue;
+      }
+
+      const fullPath =
+        path.join(
+          directory,
+          entry.name
+        );
+
+      if (
+        entry.isDirectory()
+      ) {
+        walk(fullPath);
+      } else {
+        files.push(
+          path
+            .relative(
+              projectRoot,
+              fullPath
+            )
+            .replace(
+              /\\/g,
+              "/"
+            )
+            .toLowerCase()
+        );
+      }
+    }
+  }
+
+  walk(
+    projectRoot
+  );
+
+  return files;
+}
+
+// ============================================================
+// AI HTTP
+// ============================================================
+
+async function fetchWithTimeout(
+  url,
+  options = {},
+  timeoutMs = AI_TIMEOUT_MS
+) {
+  const controller =
+    new AbortController();
+
+  const timer =
+    setTimeout(
+      () =>
+        controller.abort(),
+      timeoutMs
+    );
 
   try {
-    return JSON.parse(value);
-  } catch (_) {}
-
-  const first = value.indexOf("{");
-  const last = value.lastIndexOf("}");
-
-  if (first !== -1 && last !== -1 && last > first) {
-    try {
-      return JSON.parse(value.slice(first, last + 1));
-    } catch (_) {}
+    return await fetch(
+      url,
+      {
+        ...options,
+        signal:
+          controller.signal,
+      }
+    );
+  } finally {
+    clearTimeout(
+      timer
+    );
   }
-
-  return null;
 }
 
-// ------------------------------------------------------------
-// AI Gateway
-// ------------------------------------------------------------
+// ============================================================
+// GROQ
+// ============================================================
 
-function isRateLimitError(error) {
-  const message = String(error?.message || error || "").toLowerCase();
-
-  return (
-    message.includes("429") ||
-    message.includes("rate limit") ||
-    message.includes("rate_limit") ||
-    message.includes("too many requests") ||
-    message.includes("tokens per day")
-  );
-}
-
-async function askGroq(prompt) {
-  const apiKey = process.env.GROQ_API_KEY;
+async function askGroq(
+  messages,
+  options = {}
+) {
+  const apiKey =
+    process.env.GROQ_API_KEY;
 
   if (!apiKey) {
-    throw new Error("GROQ_API_KEY is missing.");
-  }
-
-  const response = await fetch(
-    "https://api.groq.com/openai/v1/chat/completions",
-    {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${apiKey}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        model: DEFAULT_GROQ_MODEL,
-        temperature: 0.2,
-        messages: [
-          {
-            role: "system",
-            content:
-              "You are AURA, an expert frontend engineer. Return only the requested content.",
-          },
-          {
-            role: "user",
-            content: prompt,
-          },
-        ],
-      }),
-    }
-  );
-
-  const text = await response.text();
-
-  if (!response.ok) {
-    throw new Error(`Groq ${response.status}: ${text}`);
-  }
-
-  const data = JSON.parse(text);
-
-  return data?.choices?.[0]?.message?.content || "";
-}
-
-async function askOpenRouter(prompt) {
-  const apiKey = process.env.OPENROUTER_API_KEY;
-
-  if (!apiKey) {
-    throw new Error("OPENROUTER_API_KEY is missing.");
-  }
-
-  const response = await fetch(
-    "https://openrouter.ai/api/v1/chat/completions",
-    {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${apiKey}`,
-        "Content-Type": "application/json",
-        "HTTP-Referer": "https://telegram.org",
-        "X-Title": "AURA Telegram Website Agent",
-      },
-      body: JSON.stringify({
-        model: DEFAULT_OPENROUTER_MODEL,
-        temperature: 0.2,
-        messages: [
-          {
-            role: "system",
-            content:
-              "You are AURA, an expert frontend engineer. Return only the requested JSON.",
-          },
-          {
-            role: "user",
-            content: prompt,
-          },
-        ],
-      }),
-    }
-  );
-
-  const text = await response.text();
-
-  if (!response.ok) {
-    throw new Error(`OpenRouter ${response.status}: ${text}`);
-  }
-
-  const data = JSON.parse(text);
-
-  return data?.choices?.[0]?.message?.content || "";
-}
-
-async function askAI(prompt) {
-  let groqError = null;
-
-  if (process.env.GROQ_API_KEY) {
-    try {
-      console.log("🟢 AI Gateway → Groq");
-      const result = await askGroq(prompt);
-
-      if (result) {
-        console.log("✅ Groq success");
-        return result;
-      }
-    } catch (error) {
-      groqError = error;
-
-      console.log("⚠️ Groq failed.");
-      console.log(
-        redactSecrets(error?.message || String(error))
-      );
-    }
-  }
-
-  if (process.env.OPENROUTER_API_KEY) {
-    try {
-      console.log("🔵 AI Gateway → OpenRouter");
-      const result = await askOpenRouter(prompt);
-
-      if (result) {
-        console.log("✅ OpenRouter success");
-        return result;
-      }
-    } catch (error) {
-      console.log("⚠️ OpenRouter failed.");
-      console.log(
-        redactSecrets(error?.message || String(error))
-      );
-    }
-  }
-
-  if (groqError) {
     throw new Error(
-      "All configured AI providers failed or are rate-limited."
+      "GROQ_API_KEY is missing."
     );
   }
 
-  throw new Error("No AI provider is configured.");
+  if (
+    Date.now() <
+    groqDisabledUntil
+  ) {
+    throw new Error(
+      "Groq temporarily disabled."
+    );
+  }
+
+  const response =
+    await fetchWithTimeout(
+      "https://api.groq.com/openai/v1/chat/completions",
+      {
+        method: "POST",
+        headers: {
+          "Content-Type":
+            "application/json",
+          Authorization:
+            `Bearer ${apiKey}`,
+        },
+        body:
+          JSON.stringify({
+            model:
+              options.model ||
+              GROQ_MODEL,
+            messages,
+            temperature:
+              options.temperature ??
+              0.2,
+            max_tokens:
+              options.max_tokens ||
+              12000,
+          }),
+      }
+    );
+
+  const text =
+    await response.text();
+
+  if (
+    !response.ok
+  ) {
+    if (
+      response.status ===
+      429
+    ) {
+      groqDisabledUntil =
+        Date.now() +
+        GROQ_COOLDOWN_MS;
+    }
+
+    throw new Error(
+      `Groq ${response.status}: ${text.slice(
+        0,
+        1500
+      )}`
+    );
+  }
+
+  const data =
+    JSON.parse(text);
+
+  const content =
+    data?.choices?.[0]
+      ?.message
+      ?.content;
+
+  if (
+    !content
+  ) {
+    throw new Error(
+      "Groq returned empty content."
+    );
+  }
+
+  return content;
 }
 
-// ------------------------------------------------------------
-// Fallback static website
-// ------------------------------------------------------------
+// ============================================================
+// OPENROUTER
+// ============================================================
 
-function fallbackWebsite(prompt, projectName) {
-  const safeProject = sanitizeProjectName(projectName);
+async function askOpenRouter(
+  messages,
+  options = {}
+) {
+  const apiKey =
+    process.env.OPENROUTER_API_KEY;
 
+  if (!apiKey) {
+    throw new Error(
+      "OPENROUTER_API_KEY is missing."
+    );
+  }
+
+  if (
+    Date.now() <
+    openRouterDisabledUntil
+  ) {
+    throw new Error(
+      "OpenRouter temporarily disabled."
+    );
+  }
+
+  const response =
+    await fetchWithTimeout(
+      "https://openrouter.ai/api/v1/chat/completions",
+      {
+        method: "POST",
+        headers: {
+          "Content-Type":
+            "application/json",
+
+          Authorization:
+            `Bearer ${apiKey}`,
+
+          "HTTP-Referer":
+            process.env.OPENROUTER_SITE_URL ||
+            "https://aura-telebot.onrender.com",
+
+          "X-Title":
+            process.env.OPENROUTER_APP_NAME ||
+            "AURA Agent",
+        },
+
+        body:
+          JSON.stringify({
+            model:
+              options.model ||
+              OPENROUTER_MODEL,
+
+            messages,
+
+            temperature:
+              options.temperature ??
+              0.2,
+
+            max_tokens:
+              options.max_tokens ||
+              12000,
+          }),
+      }
+    );
+
+  const text =
+    await response.text();
+
+  if (
+    !response.ok
+  ) {
+    if (
+      response.status ===
+      429
+    ) {
+      openRouterDisabledUntil =
+        Date.now() +
+        OPENROUTER_COOLDOWN_MS;
+    }
+
+    throw new Error(
+      `OpenRouter ${response.status}: ${text.slice(
+        0,
+        1500
+      )}`
+    );
+  }
+
+  const data =
+    JSON.parse(text);
+
+  const content =
+    data?.choices?.[0]
+      ?.message
+      ?.content;
+
+  if (
+    !content
+  ) {
+    throw new Error(
+      "OpenRouter returned empty content."
+    );
+  }
+
+  return content;
+}
+
+// ============================================================
+// AI GATEWAY
+// ============================================================
+
+async function askAI(
+  messages,
+  options = {}
+) {
+  const providers = [];
+
+  if (
+    process.env.GROQ_API_KEY &&
+    Date.now() >=
+      groqDisabledUntil
+  ) {
+    providers.push({
+      name:
+        "Groq",
+
+      run:
+        () =>
+          askGroq(
+            messages,
+            options
+          ),
+    });
+  }
+
+  if (
+    process.env.OPENROUTER_API_KEY &&
+    Date.now() >=
+      openRouterDisabledUntil
+  ) {
+    providers.push({
+      name:
+        "OpenRouter",
+
+      run:
+        () =>
+          askOpenRouter(
+            messages,
+            options
+          ),
+    });
+  }
+
+  if (
+    !providers.length
+  ) {
+    throw new Error(
+      "No AI provider available."
+    );
+  }
+
+  let lastError =
+    null;
+
+  for (
+    const provider of
+      providers
+  ) {
+    try {
+      console.log(
+        `🔵 AI Gateway → ${provider.name}`
+      );
+
+      const result =
+        await provider.run();
+
+      console.log(
+        `✅ ${provider.name} success`
+      );
+
+      return result;
+    } catch (
+      error
+    ) {
+      lastError =
+        error;
+
+      console.log(
+        `⚠️ ${provider.name} failed`
+      );
+
+      console.log(
+        safeError(
+          error
+        )
+      );
+    }
+  }
+
+  throw new Error(
+    `All AI providers failed. ${
+      lastError
+        ? safeError(
+            lastError
+          )
+        : ""
+    }`
+  );
+}
+
+// ============================================================
+// JSON CLEANER
+// ============================================================
+
+function extractJson(
+  content
+) {
+  let text =
+    String(
+      content || ""
+    )
+      .trim();
+
+  text =
+    text
+      .replace(
+        /^```json\s*/i,
+        ""
+      )
+      .replace(
+        /^```\s*/i,
+        ""
+      )
+      .replace(
+        /\s*```$/i,
+        ""
+      )
+      .trim();
+
+  const start =
+    text.indexOf(
+      "{"
+    );
+
+  const end =
+    text.lastIndexOf(
+      "}"
+    );
+
+  if (
+    start === -1 ||
+    end === -1 ||
+    end <= start
+  ) {
+    throw new Error(
+      "No JSON object found in AI response."
+    );
+  }
+
+  return JSON.parse(
+    text.slice(
+      start,
+      end + 1
+    )
+  );
+}
+
+// ============================================================
+// PROJECT NAME
+// ============================================================
+
+function deriveProjectName(
+  userRequest
+) {
+  const text =
+    String(
+      userRequest || ""
+    )
+      .toLowerCase();
+
+  if (
+    text.includes(
+      "portfolio"
+    )
+  ) {
+    return "aura-portfolio";
+  }
+
+  if (
+    text.includes(
+      "amazon"
+    )
+  ) {
+    return "amazon-clone";
+  }
+
+  if (
+    text.includes(
+      "sneaker"
+    )
+  ) {
+    return "sneaker-store";
+  }
+
+  if (
+    text.includes(
+      "ecommerce"
+    ) ||
+    text.includes(
+      "e-commerce"
+    ) ||
+    text.includes(
+      "shop"
+    ) ||
+    text.includes(
+      "store"
+    )
+  ) {
+    return "aura-store";
+  }
+
+  return "aura-website";
+}
+
+// ============================================================
+// REQUIREMENT ANALYSIS
+// ============================================================
+
+async function analyzeRequirements(
+  userRequest
+) {
+  const prompt = `
+You are AURA's senior product requirements analyst.
+
+Analyze the user's website request and convert it into a
+structured implementation specification.
+
+USER REQUEST:
+${String(
+  userRequest
+).slice(
+  0,
+  14000
+)}
+
+IMPORTANT:
+
+Do not invent a different application.
+
+Preserve:
+- exact branding
+- exact product names
+- exact prices
+- exact quantities
+- exact categories
+- requested features
+- persistence requirements
+- requested UI behavior
+
+Extract all explicit requirements.
+
+Return ONLY JSON:
+
+{
+  "projectName": "short-kebab-case",
+  "brand": {
+    "name": "",
+    "tagline": ""
+  },
+  "pages": [],
+  "features": [],
+  "data": [],
+  "persistence": [],
+  "uiRequirements": [],
+  "validationRequirements": [],
+  "deploymentRequirements": []
+}
+
+If the user explicitly says EXACTLY 3 products,
+do not change that to 10 or 12.
+
+If the user says frontend-only,
+do not create a backend.
+
+If the user chooses vanilla HTML/CSS/JS,
+do not introduce React or Vite.
+`;
+
+  const response =
+    await askAI(
+      [
+        {
+          role:
+            "system",
+          content:
+            "You are a senior product requirements analyst. Return valid JSON only.",
+        },
+
+        {
+          role:
+            "user",
+          content:
+            prompt,
+        },
+      ],
+      {
+        temperature:
+          0.1,
+
+        max_tokens:
+          5000,
+      }
+    );
+
+  return extractJson(
+    response
+  );
+}
+
+// ============================================================
+// FALLBACK REQUIREMENTS
+// ============================================================
+
+function fallbackRequirements(
+  userRequest
+) {
+  return {
+    projectName:
+      deriveProjectName(
+        userRequest
+      ),
+
+    brand: {
+      name:
+        "AURA Website",
+
+      tagline:
+        String(
+          userRequest
+        ).slice(
+          0,
+          120
+        ),
+    },
+
+    pages: [
+      "Home",
+    ],
+
+    features: [
+      "Responsive navigation",
+      "Hero section",
+      "Main content",
+      "Interactive controls",
+      "Footer",
+    ],
+
+    data: [],
+
+    persistence: [
+      "Use localStorage when persistence is requested.",
+    ],
+
+    uiRequirements: [
+      "Modern",
+      "Clean",
+      "Responsive",
+      "Mobile friendly",
+    ],
+
+    validationRequirements: [
+      "No broken required features.",
+    ],
+
+    deploymentRequirements: [
+      "Static website",
+    ],
+  };
+}
+
+// ============================================================
+// WHOLE APPLICATION GENERATION
+// ============================================================
+
+async function generateCompleteApplication(
+  userRequest,
+  specification,
+  projectName
+) {
+  const prompt = `
+You are AURA's senior frontend engineer.
+
+You are NOT generating one isolated file.
+
+You are implementing ONE COMPLETE APPLICATION.
+
+USER REQUEST:
+${String(
+  userRequest
+).slice(
+  0,
+  16000
+)}
+
+STRUCTURED REQUIREMENTS:
+${JSON.stringify(
+  specification,
+  null,
+  2
+)}
+
+PROJECT:
+${projectName}
+
+============================================================
+MANDATORY IMPLEMENTATION RULES
+============================================================
+
+1. Generate a COMPLETE working frontend.
+
+2. Use ONLY:
+   - HTML
+   - CSS
+   - Vanilla JavaScript
+
+3. Do NOT use:
+   - React
+   - JSX
+   - Next.js
+   - Vite
+   - npm
+   - package.json
+   - Node backend
+   - Express
+   - TypeScript
+
+4. Return EXACTLY these three files:
+   - index.html
+   - style.css
+   - script.js
+
+5. The three files are one application.
+   They must work together.
+
+6. ALL explicit user requirements must be implemented.
+
+7. DO NOT simplify requirements.
+
+8. DO NOT replace exact data with generic data.
+
+9. DO NOT add random extra products when the user specified
+   an exact product count.
+
+10. If localStorage is requested, implement it properly.
+
+11. All buttons advertised by the UI must work.
+
+12. Search/filter controls must actually modify visible data.
+
+13. Cart controls must actually update totals.
+
+14. Checkout validation must actually prevent invalid submission.
+
+15. State that must survive reloads must be saved to localStorage.
+
+16. Use browser APIs only.
+
+17. If Lucide icons are requested, use Lucide through a CDN
+    and initialize the icons correctly.
+
+18. Use polished responsive design.
+
+19. Avoid placeholder-looking layouts.
+
+20. Make the page look like a real production website.
+
+21. Use semantic HTML.
+
+22. Support desktop, tablet and mobile.
+
+23. Use realistic visual hierarchy.
+
+24. Use hover/focus/active states.
+
+25. Avoid excessive gradients unless appropriate.
+
+26. Avoid giant empty spaces.
+
+27. Do not write comments containing AI safety metadata.
+
+28. Never output text such as:
+    "User Safety: safe"
+    "Safety: safe"
+    "As an AI"
+    "Generated response"
+
+29. NEVER return markdown fences.
+
+30. Return ONLY valid JSON.
+
+============================================================
+OUTPUT FORMAT
+============================================================
+
+{
+  "index.html": "...complete file...",
+  "style.css": "...complete file...",
+  "script.js": "...complete file..."
+}
+
+============================================================
+QUALITY BAR
+============================================================
+
+The finished result should feel like it was made by a senior
+frontend engineer, not a simple demo.
+
+Think through the complete user journey before writing the files.
+
+If the application has multiple states/views, implement them
+inside the single-page application using DOM state and JavaScript.
+
+If the application has:
+- login
+- search
+- cart
+- checkout
+- payment
+- orders
+- admin
+- filtering
+- sorting
+- persistence
+
+then implement those features, not just visual buttons.
+
+============================================================
+FINAL SELF-CHECK BEFORE RETURNING
+============================================================
+
+Verify mentally:
+
+- All explicit requirements implemented
+- Exact data preserved
+- No missing interactions
+- No broken selectors
+- No undefined functions
+- No missing CSS classes
+- No missing IDs
+- No incorrect localStorage keys
+- No React/Vite code
+- No npm dependency
+- index.html references ./style.css
+- index.html references ./script.js
+- script.js works in browser
+- JavaScript is syntactically valid
+- CSS is syntactically valid
+`;
+
+  const response =
+    await askAI(
+      [
+        {
+          role:
+            "system",
+
+          content:
+            "You are an expert senior frontend engineer. Return valid JSON only.",
+        },
+
+        {
+          role:
+            "user",
+
+          content:
+            prompt,
+        },
+      ],
+      {
+        temperature:
+          0.3,
+
+        max_tokens:
+          30000,
+      }
+    );
+
+  const data =
+    extractJson(
+      response
+    );
+
+  if (
+    typeof data?.["index.html"] !==
+      "string" ||
+    typeof data?.["style.css"] !==
+      "string" ||
+    typeof data?.["script.js"] !==
+      "string"
+  ) {
+    throw new Error(
+      "AI did not return all required application files."
+    );
+  }
+
+  return {
+    "index.html":
+      data[
+        "index.html"
+      ],
+
+    "style.css":
+      data[
+        "style.css"
+      ],
+
+    "script.js":
+      data[
+        "script.js"
+      ],
+  };
+}
+
+// ============================================================
+// STATIC SYNTAX / STRUCTURE CHECK
+// ============================================================
+
+function validateStaticFiles(
+  files
+) {
+  const errors = [];
+
+  if (
+    typeof files?.[
+      "index.html"
+    ] !== "string" ||
+    !files[
+      "index.html"
+    ].trim()
+  ) {
+    errors.push(
+      "index.html is missing or empty."
+    );
+  }
+
+  if (
+    typeof files?.[
+      "style.css"
+    ] !== "string" ||
+    !files[
+      "style.css"
+    ].trim()
+  ) {
+    errors.push(
+      "style.css is missing or empty."
+    );
+  }
+
+  if (
+    typeof files?.[
+      "script.js"
+    ] !== "string" ||
+    !files[
+      "script.js"
+    ].trim()
+  ) {
+    errors.push(
+      "script.js is missing or empty."
+    );
+  }
+
+  const html =
+    files?.[
+      "index.html"
+    ] || "";
+
+  const css =
+    files?.[
+      "style.css"
+    ] || "";
+
+  const js =
+    files?.[
+      "script.js"
+    ] || "";
+
+  if (
+    html &&
+    !/<!doctype html>/i.test(
+      html
+    )
+  ) {
+    errors.push(
+      "index.html is missing <!DOCTYPE html>."
+    );
+  }
+
+  if (
+    html &&
+    !/<html[\s>]/i.test(
+      html
+    )
+  ) {
+    errors.push(
+      "index.html is missing <html>."
+    );
+  }
+
+  if (
+    html &&
+    !/<body[\s>]/i.test(
+      html
+    )
+  ) {
+    errors.push(
+      "index.html is missing <body>."
+    );
+  }
+
+  if (
+    html &&
+    !/href=["'][^"']*style\.css["']/i.test(
+      html
+    )
+  ) {
+    errors.push(
+      "index.html does not reference style.css correctly."
+    );
+  }
+
+  if (
+    html &&
+    !/src=["'][^"']*script\.js["']/i.test(
+      html
+    )
+  ) {
+    errors.push(
+      "index.html does not reference script.js correctly."
+    );
+  }
+
+  const combined =
+    html +
+    "\n" +
+    css +
+    "\n" +
+    js;
+
+  if (
+    /\bfrom\s*["']react["']/i.test(
+      combined
+    ) ||
+    /\bimport\s+React/i.test(
+      combined
+    ) ||
+    /\bReactDOM\b/i.test(
+      combined
+    ) ||
+    /\.jsx\b/i.test(
+      combined
+    )
+  ) {
+    errors.push(
+      "React/JSX code detected."
+    );
+  }
+
+  if (
+    /\bpackage\.json\b/i.test(
+      combined
+    )
+  ) {
+    errors.push(
+      "package.json content detected."
+    );
+  }
+
+  if (
+    /User Safety:/i.test(
+      combined
+    ) ||
+    /Safety:\s*(safe|unsafe)/i.test(
+      combined
+    )
+  ) {
+    errors.push(
+      "AI metadata detected inside application."
+    );
+  }
+
+  return {
+    valid:
+      errors.length === 0,
+
+    errors,
+  };
+}
+
+// ============================================================
+// FALLBACK APPLICATION
+// ============================================================
+
+function fallbackFiles(
+  userRequest
+) {
   const title =
-    safeProject
-      .split("-")
-      .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
-      .join(" ") || "AURA Website";
+    "AURA Website";
 
-  const indexHtml = `<!DOCTYPE html>
+  const indexHtml =
+`<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8">
@@ -283,110 +1405,182 @@ function fallbackWebsite(prompt, projectName) {
     name="viewport"
     content="width=device-width, initial-scale=1.0"
   >
+
   <meta
     name="description"
-    content="Website generated by AURA"
+    content="Website created by AURA"
   >
+
   <title>${title}</title>
-  <link rel="stylesheet" href="./style.css">
+
+  <link
+    rel="stylesheet"
+    href="./style.css"
+  >
 </head>
 
 <body>
-  <header class="navbar">
-    <div class="container nav-inner">
-      <a href="#" class="logo">${title}</a>
 
-      <nav>
+  <header class="header">
+    <div class="container nav">
+      <a href="#" class="logo">
+        AURA
+      </a>
+
+      <nav class="nav-links">
         <a href="#home">Home</a>
         <a href="#features">Features</a>
-        <a href="#about">About</a>
+        <a href="#contact">Contact</a>
       </nav>
+
+      <button
+        id="menuButton"
+        class="icon-button"
+        type="button"
+        aria-label="Open menu"
+      >
+        ☰
+      </button>
     </div>
   </header>
 
   <main>
-    <section id="home" class="hero">
-      <div class="container">
-        <span class="badge">Generated by AURA</span>
 
-        <h1>
-          Build something
-          <span>beautiful.</span>
-        </h1>
+    <section
+      id="home"
+      class="hero"
+    >
+      <div class="container hero-inner">
 
-        <p>
-          ${escapeHtml(prompt || "A modern website generated by AURA.")}
-        </p>
+        <div class="hero-copy">
 
-        <div class="actions">
-          <button id="primaryButton">
-            Get Started
-          </button>
+          <span class="eyebrow">
+            CREATED WITH AURA
+          </span>
 
-          <a href="#features" class="secondary-button">
+          <h1>
+            Your idea.
+            <span>Your website.</span>
+          </h1>
+
+          <p>
+            ${escapeHtml(
+              userRequest
+            )}
+          </p>
+
+          <a
+            href="#features"
+            class="primary-button"
+          >
             Explore
           </a>
+
         </div>
+
       </div>
     </section>
 
-    <section id="features" class="section">
+    <section
+      id="features"
+      class="section"
+    >
       <div class="container">
-        <h2>Features</h2>
 
-        <div class="grid">
-          <article class="card">
-            <div class="icon">01</div>
-            <h3>Modern Design</h3>
-            <p>
-              Clean, responsive and mobile-friendly interface.
-            </p>
-          </article>
+        <div class="section-heading">
+          <span class="eyebrow">
+            FEATURES
+          </span>
 
-          <article class="card">
-            <div class="icon">02</div>
-            <h3>Fast</h3>
-            <p>
-              Lightweight HTML, CSS and JavaScript.
-            </p>
-          </article>
-
-          <article class="card">
-            <div class="icon">03</div>
-            <h3>Ready to Deploy</h3>
-            <p>
-              Static files can be deployed directly to Vercel.
-            </p>
-          </article>
+          <h2>
+            Simple. Modern. Functional.
+          </h2>
         </div>
+
+        <div class="cards">
+
+          <article class="card">
+            <div class="card-number">
+              01
+            </div>
+            <h3>
+              Modern Design
+            </h3>
+            <p>
+              Clean responsive interface.
+            </p>
+          </article>
+
+          <article class="card">
+            <div class="card-number">
+              02
+            </div>
+            <h3>
+              Fast
+            </h3>
+            <p>
+              Lightweight browser-first experience.
+            </p>
+          </article>
+
+          <article class="card">
+            <div class="card-number">
+              03
+            </div>
+            <h3>
+              Ready
+            </h3>
+            <p>
+              Built for simple deployment.
+            </p>
+          </article>
+
+        </div>
+
       </div>
     </section>
 
-    <section id="about" class="section about">
+    <section
+      id="contact"
+      class="section contact"
+    >
       <div class="container">
-        <h2>About</h2>
-        <p>
-          This website was generated automatically by the AURA
-          Telegram AI agent.
-        </p>
+        <span class="eyebrow">
+          CONTACT
+        </span>
+
+        <h2>
+          Let's build something.
+        </h2>
+
+        <button
+          id="contactButton"
+          type="button"
+          class="primary-button"
+        >
+          Get Started
+        </button>
       </div>
     </section>
+
   </main>
 
   <footer>
     <div class="container">
-      <p>Generated by AURA • ${new Date().getFullYear()}</p>
+      Built with AURA ✦
     </div>
   </footer>
 
-  <script src="./script.js"></script>
+  <script
+    src="./script.js"
+  ></script>
+
 </body>
 </html>`;
 
-  const styleCss = `* {
+  const styleCss =
+`* {
   box-sizing: border-box;
-  margin: 0;
-  padding: 0;
 }
 
 html {
@@ -394,18 +1588,17 @@ html {
 }
 
 body {
+  margin: 0;
   font-family:
     Inter,
-    ui-sans-serif,
     system-ui,
     -apple-system,
     BlinkMacSystemFont,
     "Segoe UI",
     sans-serif;
 
-  background: #070b14;
+  background: #070b12;
   color: #f8fafc;
-  line-height: 1.6;
 }
 
 a {
@@ -413,984 +1606,1735 @@ a {
   text-decoration: none;
 }
 
+button {
+  font: inherit;
+}
+
 .container {
-  width: min(1120px, calc(100% - 40px));
+  width:
+    min(
+      1120px,
+      calc(100% - 40px)
+    );
+
   margin: 0 auto;
 }
 
-.navbar {
+.header {
   position: sticky;
   top: 0;
-  z-index: 20;
-  backdrop-filter: blur(18px);
-  background: rgba(7, 11, 20, 0.8);
-  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  z-index: 50;
+
+  background:
+    rgba(
+      7,
+      11,
+      18,
+      0.82
+    );
+
+  backdrop-filter:
+    blur(18px);
+
+  border-bottom:
+    1px solid
+    rgba(
+      255,
+      255,
+      255,
+      0.08
+    );
 }
 
-.nav-inner {
+.nav {
   min-height: 72px;
+
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 30px;
 }
 
 .logo {
-  font-size: 20px;
-  font-weight: 800;
+  font-weight: 900;
+  letter-spacing: 2px;
 }
 
-nav {
+.nav-links {
   display: flex;
   gap: 24px;
 }
 
-nav a {
+.nav-links a {
   color: #aeb7c8;
-  transition: 0.2s;
 }
 
-nav a:hover {
-  color: #ffffff;
+.icon-button {
+  display: none;
+
+  border: 0;
+
+  background:
+    transparent;
+
+  color: white;
+
+  cursor: pointer;
 }
 
 .hero {
-  min-height: 720px;
+  min-height: 82vh;
+
   display: flex;
   align-items: center;
-  padding: 90px 0;
+
   background:
     radial-gradient(
-      circle at 50% 20%,
-      rgba(99, 102, 241, 0.24),
-      transparent 35%
+      circle at 50% 0%,
+      rgba(
+        99,
+        102,
+        241,
+        0.25
+      ),
+      transparent 46%
     );
 }
 
-.badge {
-  display: inline-block;
-  padding: 8px 14px;
-  border-radius: 999px;
-  background: rgba(99, 102, 241, 0.12);
-  border: 1px solid rgba(99, 102, 241, 0.3);
-  color: #c7d2fe;
-  margin-bottom: 25px;
+.hero-inner {
+  padding: 100px 0;
 }
 
-.hero h1 {
-  max-width: 850px;
-  font-size: clamp(48px, 9vw, 96px);
-  line-height: 0.98;
-  letter-spacing: -0.06em;
+.eyebrow {
+  color: #8da2ff;
+
+  font-size: 12px;
+
+  font-weight: 800;
+
+  letter-spacing: 2px;
 }
 
-.hero h1 span {
+h1 {
+  max-width: 900px;
+
+  margin:
+    18px 0;
+
+  font-size:
+    clamp(
+      52px,
+      9vw,
+      104px
+    );
+
+  line-height:
+    0.95;
+
+  letter-spacing:
+    -0.06em;
+}
+
+h1 span {
   display: block;
-  color: #818cf8;
+
+  color: #8da2ff;
 }
 
 .hero p {
   max-width: 680px;
-  margin-top: 28px;
+
   color: #aeb7c8;
-  font-size: 18px;
+
+  font-size: 19px;
+
+  line-height: 1.7;
 }
 
-.actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 14px;
-  margin-top: 35px;
-}
+.primary-button {
+  display: inline-flex;
 
-button,
-.secondary-button {
+  align-items: center;
+  justify-content: center;
+
+  min-height: 48px;
+
+  padding:
+    0 20px;
+
+  margin-top: 25px;
+
   border: 0;
+
   border-radius: 12px;
-  padding: 14px 22px;
-  font-size: 15px;
-  font-weight: 700;
+
+  background: white;
+
+  color: #070b12;
+
+  font-weight: 800;
+
   cursor: pointer;
-}
-
-button {
-  background: #ffffff;
-  color: #070b14;
-}
-
-.secondary-button {
-  border: 1px solid rgba(255,255,255,0.15);
-  background: rgba(255,255,255,0.05);
 }
 
 .section {
   padding: 100px 0;
+
+  border-top:
+    1px solid
+    rgba(
+      255,
+      255,
+      255,
+      0.07
+    );
 }
 
-.section h2 {
-  font-size: 42px;
-  margin-bottom: 40px;
+.section-heading h2,
+.contact h2 {
+  margin:
+    16px 0 0;
+
+  font-size:
+    clamp(
+      36px,
+      6vw,
+      64px
+    );
+
+  line-height:
+    1;
 }
 
-.grid {
-  display: grid;
+.cards {
+  margin-top: 50px;
+
+  display:
+    grid;
+
   grid-template-columns:
-    repeat(3, minmax(0, 1fr));
+    repeat(
+      3,
+      minmax(
+        0,
+        1fr
+      )
+    );
+
   gap: 20px;
 }
 
 .card {
   padding: 30px;
-  border: 1px solid rgba(255,255,255,0.08);
-  border-radius: 20px;
-  background: rgba(255,255,255,0.04);
+
+  min-height: 210px;
+
+  border:
+    1px solid
+    rgba(
+      255,
+      255,
+      255,
+      0.08
+    );
+
+  border-radius: 22px;
+
+  background:
+    rgba(
+      255,
+      255,
+      255,
+      0.035
+    );
 }
 
-.icon {
-  width: 42px;
-  height: 42px;
-  display: grid;
-  place-items: center;
-  border-radius: 12px;
-  background: #818cf8;
-  color: #070b14;
-  font-weight: 800;
-  margin-bottom: 20px;
+.card-number {
+  color: #8da2ff;
+
+  font-weight: 900;
+
+  margin-bottom:
+    35px;
 }
 
 .card h3 {
-  margin-bottom: 10px;
+  font-size: 24px;
 }
 
-.card p,
-.about p {
+.card p {
   color: #aeb7c8;
 }
 
-.about {
-  background: rgba(255,255,255,0.02);
+.contact {
+  text-align: center;
 }
 
 footer {
   padding: 30px 0;
-  border-top: 1px solid rgba(255,255,255,0.08);
-  color: #7f8a9d;
+
+  text-align: center;
+
+  color: #697386;
+
+  border-top:
+    1px solid
+    rgba(
+      255,
+      255,
+      255,
+      0.07
+    );
 }
 
-@media (max-width: 760px) {
-  nav {
+@media (
+  max-width: 720px
+) {
+  .nav-links {
     display: none;
   }
 
-  .grid {
+  .icon-button {
+    display: block;
+  }
+
+  .cards {
     grid-template-columns: 1fr;
   }
 
-  .hero {
-    min-height: 650px;
+  .hero-inner {
+    padding:
+      80px 0;
   }
 }`;
 
-  const scriptJs = `document.addEventListener("DOMContentLoaded", () => {
-  const button = document.getElementById("primaryButton");
+  const scriptJs =
+`document.addEventListener(
+  "DOMContentLoaded",
+  () => {
+    const button =
+      document.getElementById(
+        "contactButton"
+      );
 
-  if (!button) return;
+    if (button) {
+      button.addEventListener(
+        "click",
+        () => {
+          alert(
+            "Thanks for getting started!"
+          );
+        }
+      );
+    }
 
-  button.addEventListener("click", () => {
-    button.textContent = "Started ✓";
+    const menuButton =
+      document.getElementById(
+        "menuButton"
+      );
 
-    setTimeout(() => {
-      button.textContent = "Get Started";
-    }, 1800);
-  });
-});`;
+    if (menuButton) {
+      menuButton.addEventListener(
+        "click",
+        () => {
+          document
+            .querySelector(
+              ".nav-links"
+            )
+            ?.classList.toggle(
+              "open"
+            );
+        }
+      );
+    }
+  }
+);`;
 
   return {
-    "index.html": indexHtml,
-    "style.css": styleCss,
-    "script.js": scriptJs,
+    "index.html":
+      indexHtml,
+
+    "style.css":
+      styleCss,
+
+    "script.js":
+      scriptJs,
   };
 }
 
-function escapeHtml(value) {
-  return String(value || "")
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&#039;");
+// ============================================================
+// REVIEW PROMPT
+// ============================================================
+
+async function reviewApplication(
+  userRequest,
+  specification,
+  files
+) {
+  const prompt = `
+You are AURA's senior QA engineer and frontend reviewer.
+
+Review the COMPLETE generated website against the original
+requirements.
+
+ORIGINAL USER REQUEST:
+${String(
+  userRequest
+).slice(
+  0,
+  15000
+)}
+
+STRUCTURED REQUIREMENTS:
+${JSON.stringify(
+  specification,
+  null,
+  2
+)}
+
+GENERATED INDEX.HTML:
+${files["index.html"]}
+
+GENERATED STYLE.CSS:
+${files["style.css"]}
+
+GENERATED SCRIPT.JS:
+${files["script.js"]}
+
+Return ONLY JSON:
+
+{
+  "passed": true,
+  "score": 0,
+  "missingRequirements": [],
+  "brokenFeatures": [],
+  "designProblems": [],
+  "repairNeeded": false,
+  "repairInstructions": []
 }
 
-// ------------------------------------------------------------
-// AI generation
-// ------------------------------------------------------------
+Review carefully:
 
-async function generateWebsiteWithAI(prompt, projectName) {
-  const safeName = sanitizeProjectName(projectName);
+- exact user requirements
+- exact data
+- number of products
+- product prices
+- product names
+- search behavior
+- cart behavior
+- quantity controls
+- subtotal
+- shipping
+- grand total
+- checkout
+- payment validation
+- localStorage persistence
+- order history
+- stock changes
+- buttons actually working
+- responsive layout
+- navigation
+- accessibility
+- no React
+- no Vite
+- no npm
+- no broken references
 
-  const aiPrompt = `
-You are generating a production-quality STATIC website.
+Do NOT penalize the app for implementing extra useful functionality
+unless it conflicts with explicit requirements.
 
-User request:
-${prompt}
+Do NOT invent requirements.
+`;
 
-Project name:
-${safeName}
+  const response =
+    await askAI(
+      [
+        {
+          role:
+            "system",
+
+          content:
+            "You are a strict senior frontend QA reviewer. Return valid JSON only.",
+        },
+
+        {
+          role:
+            "user",
+
+          content:
+            prompt,
+        },
+      ],
+      {
+        temperature:
+          0.1,
+
+        max_tokens:
+          8000,
+      }
+    );
+
+  return extractJson(
+    response
+  );
+}
+
+// ============================================================
+// REPAIR PROMPT
+// ============================================================
+
+async function repairApplication(
+  userRequest,
+  specification,
+  files,
+  review
+) {
+  const prompt = `
+You are AURA's senior frontend engineer.
+
+The application below was reviewed and has issues.
+
+USER REQUEST:
+${String(
+  userRequest
+).slice(
+  0,
+  15000
+)}
+
+STRUCTURED REQUIREMENTS:
+${JSON.stringify(
+  specification,
+  null,
+  2
+)}
+
+REVIEW:
+${JSON.stringify(
+  review,
+  null,
+  2
+)}
+
+CURRENT INDEX.HTML:
+${files["index.html"]}
+
+CURRENT STYLE.CSS:
+${files["style.css"]}
+
+CURRENT SCRIPT.JS:
+${files["script.js"]}
+
+REPAIR ALL identified requirements and functionality.
 
 IMPORTANT:
-- Generate ONLY plain HTML, CSS and vanilla JavaScript.
-- NO React.
-- NO JSX.
-- NO Vite.
-- NO npm.
-- NO package.json.
-- NO imports.
-- NO external build system.
-- The website must work by simply opening index.html.
-- Use exactly these three files:
-  1. index.html
-  2. style.css
-  3. script.js
-- index.html must link ./style.css and ./script.js.
-- Do not use markdown.
-- Do not include code fences.
-- Return ONLY valid JSON.
 
-JSON format:
+- Keep exact user data.
+- Keep exact branding.
+- Don't remove working functionality.
+- Don't downgrade design.
+- Don't replace real features with placeholders.
+- Ensure all buttons work.
+- Ensure all localStorage logic works.
+- Ensure all JavaScript references valid elements.
+- Ensure the three files remain compatible.
+- No React.
+- No JSX.
+- No Vite.
+- No npm.
+- No package.json.
+- No backend.
+- No markdown fences.
+- No AI metadata.
+
+Return ONLY:
+
 {
   "index.html": "...",
   "style.css": "...",
   "script.js": "..."
 }
-
-Make the website polished, responsive and functional.
 `;
 
-  const response = await askAI(aiPrompt);
-  const parsed = extractJson(response);
+  const response =
+    await askAI(
+      [
+        {
+          role:
+            "system",
 
-  if (!parsed) {
-    throw new Error("AI returned invalid website JSON.");
-  }
+          content:
+            "You are a senior frontend repair engineer. Return valid JSON only.",
+        },
 
-  const files = {
-    "index.html": parsed["index.html"],
-    "style.css": parsed["style.css"],
-    "script.js": parsed["script.js"],
-  };
+        {
+          role:
+            "user",
+
+          content:
+            prompt,
+        },
+      ],
+      {
+        temperature:
+          0.2,
+
+        max_tokens:
+          30000,
+      }
+    );
+
+  const repaired =
+    extractJson(
+      response
+    );
 
   if (
-    typeof files["index.html"] !== "string" ||
-    typeof files["style.css"] !== "string" ||
-    typeof files["script.js"] !== "string"
+    typeof repaired?.[
+      "index.html"
+    ] !==
+      "string" ||
+    typeof repaired?.[
+      "style.css"
+    ] !==
+      "string" ||
+    typeof repaired?.[
+      "script.js"
+    ] !==
+      "string"
   ) {
-    throw new Error("AI response is missing required static files.");
-  }
-
-  return files;
-}
-
-// ------------------------------------------------------------
-// Validation
-// ------------------------------------------------------------
-
-function validateWebsiteFiles(files) {
-  const errors = [];
-
-  if (!files || typeof files !== "object") {
-    errors.push("Website files are missing.");
-    return {
-      valid: false,
-      errors,
-    };
-  }
-
-  for (const required of ["index.html", "style.css", "script.js"]) {
-    if (
-      typeof files[required] !== "string" ||
-      !files[required].trim()
-    ) {
-      errors.push(`Missing ${required}.`);
-    }
-  }
-
-  const html = files["index.html"] || "";
-  const css = files["style.css"] || "";
-  const js = files["script.js"] || "";
-
-  if (!/<html[\s>]/i.test(html)) {
-    errors.push("index.html does not contain an <html> element.");
-  }
-
-  if (!/<head[\s>]/i.test(html)) {
-    errors.push("index.html does not contain a <head> element.");
-  }
-
-  if (!/<body[\s>]/i.test(html)) {
-    errors.push("index.html does not contain a <body> element.");
-  }
-
-  if (!/stylesheet/i.test(html)) {
-    errors.push("index.html does not appear to load style.css.");
-  }
-
-  if (!/<script[^>]+src=["']\.?\/?script\.js/i.test(html)) {
-    errors.push("index.html does not appear to load script.js.");
-  }
-
-  // Detect accidental React/JSX output.
-  if (
-    /from\s+["']react["']/i.test(html) ||
-    /from\s+["']react["']/i.test(js) ||
-    /import\s+React/i.test(js) ||
-    /<[A-Z][A-Za-z0-9]*/.test(js)
-  ) {
-    errors.push("React/JSX code detected.");
-  }
-
-  if (/package\.json/i.test(html + css + js)) {
-    errors.push("package.json content detected in static files.");
+    throw new Error(
+      "AI repair did not return all files."
+    );
   }
 
   return {
-    valid: errors.length === 0,
+    "index.html":
+      repaired[
+        "index.html"
+      ],
+
+    "style.css":
+      repaired[
+        "style.css"
+      ],
+
+    "script.js":
+      repaired[
+        "script.js"
+      ],
+  };
+}
+
+// ============================================================
+// SAFE APPLICATION VALIDATION
+// ============================================================
+
+function validateApplication(
+  files
+) {
+  const errors = [];
+
+  const staticResult =
+    validateStaticFiles(
+      files
+    );
+
+  if (
+    !staticResult.valid
+  ) {
+    errors.push(
+      ...staticResult.errors
+    );
+  }
+
+  const html =
+    files[
+      "index.html"
+    ] || "";
+
+  const css =
+    files[
+      "style.css"
+    ] || "";
+
+  const js =
+    files[
+      "script.js"
+    ] || "";
+
+  /*
+   * Basic JavaScript balance checks.
+   *
+   * This is not a full JS parser, but catches
+   * common broken output.
+   */
+
+  const openBraces =
+    (
+      js.match(
+        /{/g
+      ) || []
+    ).length;
+
+  const closeBraces =
+    (
+      js.match(
+        /}/g
+      ) || []
+    ).length;
+
+  if (
+    openBraces !==
+    closeBraces
+  ) {
+    errors.push(
+      "JavaScript braces are unbalanced."
+    );
+  }
+
+  const openParens =
+    (
+      js.match(
+        /\(/g
+      ) || []
+    ).length;
+
+  const closeParens =
+    (
+      js.match(
+        /\)/g
+      ) || []
+    ).length;
+
+  if (
+    openParens !==
+    closeParens
+  ) {
+    errors.push(
+      "JavaScript parentheses are unbalanced."
+    );
+  }
+
+  if (
+    html.includes(
+      'src="./App.js"'
+    ) ||
+    html.includes(
+      'src="./main.js"'
+    )
+  ) {
+    errors.push(
+      "Unexpected JS filename reference."
+    );
+  }
+
+  return {
+    success:
+      errors.length === 0,
+
     errors,
   };
 }
 
-// ------------------------------------------------------------
-// Ensure required files
-// ------------------------------------------------------------
+// ============================================================
+// WRITE APPLICATION
+// ============================================================
 
-function ensureRequiredFrontendFiles(projectDir, files, prompt, projectName) {
-  ensureDir(projectDir);
-
-  const fallback = fallbackWebsite(prompt, projectName);
-
-  const finalFiles = {
-    "index.html":
-      typeof files?.["index.html"] === "string" &&
-      files["index.html"].trim()
-        ? files["index.html"]
-        : fallback["index.html"],
-
-    "style.css":
-      typeof files?.["style.css"] === "string" &&
-      files["style.css"].trim()
-        ? files["style.css"]
-        : fallback["style.css"],
-
-    "script.js":
-      typeof files?.["script.js"] === "string" &&
-      files["script.js"].trim()
-        ? files["script.js"]
-        : fallback["script.js"],
-  };
-
-  let validation = validateWebsiteFiles(finalFiles);
-
-  if (!validation.valid) {
-    console.log("⚠️ Generated files failed validation.");
-    console.log(validation.errors);
-
-    console.log("🛠️ Using safe static fallback.");
-
-    Object.assign(finalFiles, fallback);
-
-    validation = validateWebsiteFiles(finalFiles);
-  }
-
-  if (!validation.valid) {
-    throw new Error(
-      `Static website validation failed: ${validation.errors.join(", ")}`
-    );
-  }
-
-  writeFileSafe(
-    path.join(projectDir, "index.html"),
-    finalFiles["index.html"]
+function writeApplication(
+  projectRoot,
+  files
+) {
+  writeProjectFile(
+    projectRoot,
+    "index.html",
+    files[
+      "index.html"
+    ]
   );
 
-  writeFileSafe(
-    path.join(projectDir, "style.css"),
-    finalFiles["style.css"]
+  writeProjectFile(
+    projectRoot,
+    "style.css",
+    files[
+      "style.css"
+    ]
   );
 
-  writeFileSafe(
-    path.join(projectDir, "script.js"),
-    finalFiles["script.js"]
+  writeProjectFile(
+    projectRoot,
+    "script.js",
+    files[
+      "script.js"
+    ]
   );
-
-  return finalFiles;
 }
 
-// ------------------------------------------------------------
-// Generate frontend
-// ------------------------------------------------------------
+// ============================================================
+// GENERATE COMPLETE SITE
+// ============================================================
 
-async function generateFrontendFiles(prompt, projectName) {
-  const safeName = sanitizeProjectName(projectName);
-  const projectDir = projectDirectory(safeName);
-
+async function generateFrontendFiles({
+  projectRoot,
+  projectName,
+  userRequest,
+}) {
   console.log("");
-  console.log("==========================================");
-  console.log("🎨 STATIC WEBSITE GENERATION");
-  console.log("==========================================");
+  console.log(
+    "=========================================="
+  );
+  console.log(
+    "🎨 WHOLE APPLICATION GENERATION"
+  );
+  console.log(
+    "=========================================="
+  );
 
-  console.log(`📦 Project: ${safeName}`);
-  console.log(`📂 Root: ${projectDir}`);
-
-  let files = null;
+  let specification;
 
   try {
-    console.log("🧠 Asking AI to generate HTML/CSS/JS...");
-
-    files = await generateWebsiteWithAI(
-      prompt,
-      safeName
-    );
-
-    console.log("✅ AI generated static website.");
-  } catch (error) {
-    console.log("⚠️ AI generation failed.");
     console.log(
-      redactSecrets(error?.message || String(error))
+      "🧠 Analyzing requirements..."
     );
 
-    console.log("🛠️ Using fallback static website.");
+    specification =
+      await analyzeRequirements(
+        userRequest
+      );
 
-    files = fallbackWebsite(prompt, safeName);
+    console.log(
+      "✅ Requirements analyzed."
+    );
+  } catch (
+    error
+  ) {
+    console.log(
+      "⚠️ Requirement analysis failed."
+    );
+
+    console.log(
+      safeError(
+        error
+      )
+    );
+
+    specification =
+      fallbackRequirements(
+        userRequest
+      );
   }
 
-  const finalFiles = ensureRequiredFrontendFiles(
-    projectDir,
-    files,
-    prompt,
-    safeName
+  let files;
+
+  try {
+    console.log(
+      "💻 Generating complete application..."
+    );
+
+    files =
+      await generateCompleteApplication(
+        userRequest,
+        specification,
+        projectName
+      );
+
+    console.log(
+      "✅ Complete application generated."
+    );
+  } catch (
+    error
+  ) {
+    console.log(
+      "⚠️ Complete generation failed."
+    );
+
+    console.log(
+      safeError(
+        error
+      )
+    );
+
+    console.log(
+      "🛠️ Using fallback application."
+    );
+
+    files =
+      fallbackFiles(
+        userRequest
+      );
+  }
+
+  /*
+   * ---------------------------------------------------------
+   * REVIEW + REPAIR LOOP
+   * ---------------------------------------------------------
+   */
+
+  for (
+    let attempt = 0;
+    attempt <= MAX_REVIEW_REPAIRS;
+    attempt++
+  ) {
+    const staticValidation =
+      validateApplication(
+        files
+      );
+
+    if (
+      !staticValidation.success
+    ) {
+      console.log(
+        "⚠️ Static validation problems:"
+      );
+
+      console.log(
+        staticValidation.errors
+      );
+    }
+
+    try {
+      console.log(
+        `🔍 Reviewing application (${attempt + 1}/${MAX_REVIEW_REPAIRS + 1})...`
+      );
+
+      const review =
+        await reviewApplication(
+          userRequest,
+          specification,
+          files
+        );
+
+      console.log(
+        `📊 Review score: ${review.score || "N/A"}`
+      );
+
+      const passed =
+        review.passed === true &&
+        review.repairNeeded !== true &&
+        staticValidation.success;
+
+      if (
+        passed
+      ) {
+        console.log(
+          "✅ Application review passed."
+        );
+
+        break;
+      }
+
+      if (
+        attempt >=
+        MAX_REVIEW_REPAIRS
+      ) {
+        console.log(
+          "⚠️ Maximum repair attempts reached."
+        );
+
+        break;
+      }
+
+      console.log(
+        "🔧 Repairing application..."
+      );
+
+      try {
+        files =
+          await repairApplication(
+            userRequest,
+            specification,
+            files,
+            review
+          );
+
+        console.log(
+          "✅ Application repaired."
+        );
+      } catch (
+        repairError
+      ) {
+        console.log(
+          "⚠️ Repair failed."
+        );
+
+        console.log(
+          safeError(
+            repairError
+          )
+        );
+
+        break;
+      }
+    } catch (
+      reviewError
+    ) {
+      console.log(
+        "⚠️ Review unavailable."
+      );
+
+      console.log(
+        safeError(
+          reviewError
+        )
+      );
+
+      /*
+       * We don't destroy an otherwise valid app
+       * just because the reviewer hit a rate limit.
+       */
+
+      if (
+        staticValidation.success
+      ) {
+        break;
+      }
+    }
+  }
+
+  /*
+   * Final static validation.
+   */
+
+  const finalValidation =
+    validateApplication(
+      files
+    );
+
+  if (
+    !finalValidation.success
+  ) {
+    console.log(
+      "⚠️ Final static validation failed."
+    );
+
+    console.log(
+      finalValidation.errors
+    );
+
+    console.log(
+      "🛠️ Using safe fallback."
+    );
+
+    files =
+      fallbackFiles(
+        userRequest
+      );
+  }
+
+  writeApplication(
+    projectRoot,
+    files
   );
 
-  console.log("");
-  console.log("==========================================");
-  console.log("🔐 VERIFY STATIC WEBSITE");
-  console.log("==========================================");
-
-  const verification =
-    validateWebsiteFiles(finalFiles);
-
-  if (!verification.valid) {
-    throw new Error(
-      verification.errors.join("\n")
-    );
-  }
-
-  console.log("✅ Static website verified.");
-  console.log("   ✓ index.html");
-  console.log("   ✓ style.css");
-  console.log("   ✓ script.js");
-  console.log("   ✓ no React");
-  console.log("   ✓ no Vite");
-  console.log("   ✓ no npm build");
-
   return {
-    projectName: safeName,
-    projectDir,
-    files: finalFiles,
-    verification,
+    success:
+      true,
+
+    projectRoot,
+
+    projectName,
+
+    files: [
+      "index.html",
+      "style.css",
+      "script.js",
+    ],
+
+    specification,
   };
 }
 
-// ------------------------------------------------------------
-// Static build
-// ------------------------------------------------------------
+// ============================================================
+// VERIFY
+// ============================================================
 
-function buildFrontend(projectDir) {
+function verifyFrontend(
+  projectRoot
+) {
   console.log("");
-  console.log("==========================================");
-  console.log("🏗️ STEP — STATIC VALIDATION");
-  console.log("==========================================");
+  console.log(
+    "=========================================="
+  );
+  console.log(
+    "🔐 STATIC WEBSITE VERIFICATION"
+  );
+  console.log(
+    "=========================================="
+  );
 
-  const requiredFiles = [
-    "index.html",
-    "style.css",
-    "script.js",
-  ];
+  const requiredFiles =
+    [
+      "index.html",
+      "style.css",
+      "script.js",
+    ];
 
-  for (const file of requiredFiles) {
-    const fullPath = path.join(projectDir, file);
+  const errors = [];
 
-    if (!fs.existsSync(fullPath)) {
-      throw new Error(`Missing required file: ${file}`);
-    }
+  for (
+    const file of
+      requiredFiles
+  ) {
+    const content =
+      readProjectFile(
+        projectRoot,
+        file
+      );
 
-    const stat = fs.statSync(fullPath);
-
-    if (!stat.isFile()) {
-      throw new Error(`${file} is not a file.`);
-    }
-
-    if (stat.size === 0) {
-      throw new Error(`${file} is empty.`);
+    if (
+      !content ||
+      !content.trim()
+    ) {
+      errors.push(
+        `Missing or empty ${file}`
+      );
     }
   }
 
   const files = {
-    "index.html": readFileSafe(
-      path.join(projectDir, "index.html")
-    ),
-    "style.css": readFileSafe(
-      path.join(projectDir, "style.css")
-    ),
-    "script.js": readFileSafe(
-      path.join(projectDir, "script.js")
-    ),
+    "index.html":
+      readProjectFile(
+        projectRoot,
+        "index.html"
+      ) || "",
+
+    "style.css":
+      readProjectFile(
+        projectRoot,
+        "style.css"
+      ) || "",
+
+    "script.js":
+      readProjectFile(
+        projectRoot,
+        "script.js"
+      ) || "",
   };
 
-  const result = validateWebsiteFiles(files);
-
-  if (!result.valid) {
-    throw new Error(
-      `Static build validation failed:\n${result.errors.join("\n")}`
+  const validation =
+    validateApplication(
+      files
     );
+
+  errors.push(
+    ...validation.errors
+  );
+
+  /*
+   * Forbid unwanted generated framework files.
+   */
+
+  const allFiles =
+    listProjectFiles(
+      projectRoot
+    );
+
+  for (
+    const file of allFiles
+  ) {
+    if (
+      file.endsWith(
+        ".jsx"
+      ) ||
+      file.endsWith(
+        ".tsx"
+      )
+    ) {
+      errors.push(
+        `React file found: ${file}`
+      );
+    }
+
+    if (
+      file ===
+        "package.json" ||
+      file.endsWith(
+        "package-lock.json"
+      )
+    ) {
+      errors.push(
+        `NPM file found: ${file}`
+      );
+    }
+
+    if (
+      file.startsWith(
+        ".env"
+      )
+    ) {
+      errors.push(
+        `Environment file found: ${file}`
+      );
+    }
   }
 
-  console.log("📄 index.html ✓");
-  console.log("🎨 style.css ✓");
-  console.log("⚙️ script.js ✓");
-  console.log("");
-  console.log("✅ Static website build successful.");
+  if (
+    errors.length
+  ) {
+    console.log(
+      "❌ Verification failed."
+    );
+
+    return {
+      success:
+        false,
+
+      errors,
+      warnings: [],
+    };
+  }
+
+  console.log(
+    "✅ Static website verified."
+  );
 
   return {
-    success: true,
-    files,
+    success:
+      true,
+
+    errors: [],
+
+    warnings: [],
   };
 }
 
-// ------------------------------------------------------------
-// Vercel helpers
-// ------------------------------------------------------------
+// ============================================================
+// SHA1
+// ============================================================
+
+function sha1(buffer) {
+  return crypto
+    .createHash(
+      "sha1"
+    )
+    .update(
+      buffer
+    )
+    .digest(
+      "hex"
+    );
+}
+
+// ============================================================
+// VERCEL REQUEST
+// ============================================================
 
 async function vercelRequest(
   url,
   token,
   options = {}
 ) {
-  const headers = {
-    Authorization: `Bearer ${token}`,
-    ...(options.headers || {}),
-  };
+  const response =
+    await fetch(
+      url,
+      {
+        ...options,
 
-  const response = await fetch(url, {
-    ...options,
-    headers,
-  });
+        headers: {
+          Authorization:
+            `Bearer ${token}`,
 
-  const text = await response.text();
+          ...(options.headers ||
+            {}),
+        },
+      }
+    );
+
+  const text =
+    await response.text();
 
   let data;
 
   try {
-    data = text ? JSON.parse(text) : {};
-  } catch (_) {
+    data =
+      text
+        ? JSON.parse(
+            text
+          )
+        : {};
+  } catch {
     data = {
       raw: text,
     };
   }
 
-  if (!response.ok) {
-    const message =
-      data?.error?.message ||
-      data?.message ||
-      text ||
-      `Vercel HTTP ${response.status}`;
-
+  if (
+    !response.ok
+  ) {
     throw new Error(
-      `Vercel API ${response.status}: ${message}`
+      `Vercel API ${response.status}: ${
+        data?.error?.message ||
+        data?.error?.code ||
+        text
+      }`
     );
   }
 
   return data;
 }
 
-// ------------------------------------------------------------
-// Upload file to Vercel
-// ------------------------------------------------------------
+// ============================================================
+// VERCEL FILE UPLOAD
+// ============================================================
 
 async function uploadVercelFile(
   token,
-  content
+  buffer
 ) {
-  const buffer = Buffer.isBuffer(content)
-    ? content
-    : Buffer.from(content, "utf8");
+  const digest =
+    sha1(
+      buffer
+    );
 
-  const digest = sha1(buffer);
-
-  const headers = {
-    "Content-Type": "application/octet-stream",
-    "Content-Length": String(buffer.length),
-    "x-vercel-digest": digest,
-  };
-
-  let response = await fetch(
-    "https://api.vercel.com/v2/files",
-    {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${token}`,
-        ...headers,
-      },
-      body: buffer,
-    }
-  );
-
-  if (!response.ok) {
-    // Compatibility fallback for older Vercel endpoint.
-    response = await fetch(
-      "https://api.vercel.com/v2/now/files",
+  const response =
+    await fetch(
+      "https://api.vercel.com/v2/files",
       {
-        method: "POST",
+        method:
+          "POST",
+
         headers: {
-          Authorization: `Bearer ${token}`,
-          ...headers,
+          Authorization:
+            `Bearer ${token}`,
+
+          "Content-Type":
+            "application/octet-stream",
+
+          "Content-Length":
+            String(
+              buffer.length
+            ),
+
+          "x-vercel-digest":
+            digest,
         },
-        body: buffer,
+
+        body:
+          buffer,
       }
     );
-  }
 
-  const text = await response.text();
+  const text =
+    await response.text();
 
-  if (!response.ok) {
+  if (
+    !response.ok
+  ) {
     throw new Error(
-      `Vercel file upload failed (${response.status}): ${text}`
+      `Vercel file upload failed (${response.status}): ${text.slice(
+        0,
+        2000
+      )}`
     );
   }
 
   return {
-    sha: digest,
-    size: buffer.length,
+    sha:
+      digest,
+
+    size:
+      buffer.length,
   };
 }
 
-// ------------------------------------------------------------
-// Deploy static website
-// ------------------------------------------------------------
+// ============================================================
+// VERCEL DEPLOY
+// ============================================================
 
 async function deployToVercel(
-  projectDir,
+  projectRoot,
   projectName,
-  accessToken
+  accessToken,
+  teamId = null
 ) {
-  if (!accessToken) {
-    throw new Error(
-      "No Vercel access token is available. Connect Vercel first."
-    );
+  if (
+    !accessToken
+  ) {
+    return {
+      success:
+        false,
+
+      reason:
+        "Vercel account is not connected.",
+    };
   }
 
-  console.log("");
-  console.log("==========================================");
-  console.log("🚀 VERCEL DEPLOYMENT");
-  console.log("==========================================");
-
-  const safeName = sanitizeProjectName(projectName);
-
-  const filesToDeploy = [
-    {
-      file: "index.html",
-      content: readFileSafe(
-        path.join(projectDir, "index.html")
-      ),
-    },
-    {
-      file: "style.css",
-      content: readFileSafe(
-        path.join(projectDir, "style.css")
-      ),
-    },
-    {
-      file: "script.js",
-      content: readFileSafe(
-        path.join(projectDir, "script.js")
-      ),
-    },
-  ];
-
-  const deploymentFiles = [];
-
-  for (const item of filesToDeploy) {
-    if (!item.content) {
-      throw new Error(
-        `Cannot deploy empty file: ${item.file}`
-      );
-    }
-
-    console.log(`⬆️ Uploading ${item.file}...`);
-
-    const uploaded = await uploadVercelFile(
-      accessToken,
-      item.content
-    );
-
-    deploymentFiles.push({
-      file: item.file,
-      sha: uploaded.sha,
-      size: uploaded.size,
-    });
-  }
-
-  console.log("📦 Creating Vercel deployment...");
-
-  const deployment = await vercelRequest(
-    "https://api.vercel.com/v13/deployments",
-    accessToken,
-    {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        name: safeName,
-        files: deploymentFiles,
-        projectSettings: {
-          framework: null,
-        },
-        target: "production",
-      }),
-    }
-  );
-
-  console.log(
-    `🆔 Deployment: ${deployment?.id || "unknown"}`
-  );
-
-  let deploymentData = deployment;
-
-  if (deployment?.id) {
-    try {
-      deploymentData = await waitForVercelDeployment(
-        accessToken,
-        deployment.id
-      );
-    } catch (error) {
-      console.log(
-        "⚠️ Could not complete deployment polling:",
-        error.message
-      );
-    }
-  }
-
-  const url =
-    deploymentData?.url ||
-    deployment?.url ||
-    null;
-
-  if (!url) {
-    throw new Error(
-      "Vercel deployment was created but no URL was returned."
-    );
-  }
-
-  const liveUrl = url.startsWith("http")
-    ? url
-    : `https://${url}`;
-
-  console.log("");
-  console.log("==========================================");
-  console.log("🎉 DEPLOYMENT SUCCESS");
-  console.log("==========================================");
-  console.log(liveUrl);
-
-  return {
-    success: true,
-    id: deployment?.id,
-    url: liveUrl,
-    state:
-      deploymentData?.readyState ||
-      deployment?.readyState ||
-      "READY",
-  };
-}
-
-// ------------------------------------------------------------
-// Wait for deployment
-// ------------------------------------------------------------
-
-async function waitForVercelDeployment(
-  token,
-  deploymentId,
-  timeoutMs = 300000
-) {
-  const started = Date.now();
-
-  while (Date.now() - started < timeoutMs) {
-    const data = await vercelRequest(
-      `https://api.vercel.com/v13/deployments/${encodeURIComponent(
-        deploymentId
-      )}`,
-      token,
-      {
-        method: "GET",
-      }
-    );
-
-    const state =
-      data?.readyState ||
-      data?.state ||
-      "";
-
-    console.log(`⏳ Vercel status: ${state}`);
-
-    if (state === "READY") {
-      return data;
-    }
-
-    if (
-      state === "ERROR" ||
-      state === "CANCELED"
-    ) {
-      throw new Error(
-        `Vercel deployment failed with state: ${state}`
-      );
-    }
-
-    await new Promise((resolve) =>
-      setTimeout(resolve, 3000)
-    );
-  }
-
-  throw new Error(
-    "Vercel deployment timed out after 5 minutes."
-  );
-}
-
-// ------------------------------------------------------------
-// No-op compatibility functions
-// ------------------------------------------------------------
-
-function verifyFrontend(projectDir) {
-  return buildFrontend(projectDir);
-}
-
-function normalizeFrontendFiles(files) {
-  return {
-    "index.html": files?.["index.html"] || "",
-    "style.css": files?.["style.css"] || "",
-    "script.js": files?.["script.js"] || "",
-  };
-}
-
-// ------------------------------------------------------------
-// Agent entry
-// ------------------------------------------------------------
-
-async function runAgent(prompt, options = {}) {
-  const projectName =
+  const safeProjectName =
     sanitizeProjectName(
-      options.projectName ||
-        extractProjectName(prompt) ||
-        "aura-site"
-    );
-
-  console.log("");
-  console.log("==========================================");
-  console.log("🤖 AURA AGENT REQUEST");
-  console.log("==========================================");
-
-  console.log(`🎯 Goal: ${prompt}`);
-  console.log(`📦 Project: ${projectName}`);
-
-  const generated =
-    await generateFrontendFiles(
-      prompt,
       projectName
     );
 
-  const build =
-    buildFrontend(generated.projectDir);
+  const required =
+    [
+      "index.html",
+      "style.css",
+      "script.js",
+    ];
+
+  const deploymentFiles =
+    [];
+
+  for (
+    const file of
+      required
+  ) {
+    const fullPath =
+      path.join(
+        projectRoot,
+        file
+      );
+
+    if (
+      !fs.existsSync(
+        fullPath
+      )
+    ) {
+      throw new Error(
+        `Missing deployment file: ${file}`
+      );
+    }
+
+    const buffer =
+      fs.readFileSync(
+        fullPath
+      );
+
+    console.log(
+      `☁️ Uploading ${file}...`
+    );
+
+    const uploaded =
+      await uploadVercelFile(
+        accessToken,
+        buffer
+      );
+
+    deploymentFiles.push({
+      file,
+      sha:
+        uploaded.sha,
+      size:
+        uploaded.size,
+    });
+  }
+
+  const payload = {
+    name:
+      safeProjectName,
+
+    files:
+      deploymentFiles,
+
+    target:
+      "production",
+
+    projectSettings: {
+      framework:
+        null,
+    },
+  };
+
+  let url =
+    "https://api.vercel.com/v13/deployments";
+
+  if (
+    teamId
+  ) {
+    url +=
+      `?teamId=${encodeURIComponent(
+        teamId
+      )}`;
+  }
+
+  console.log(
+    "🚀 Creating Vercel deployment..."
+  );
+
+  const deployment =
+    await vercelRequest(
+      url,
+      accessToken,
+      {
+        method:
+          "POST",
+
+        headers: {
+          "Content-Type":
+            "application/json",
+        },
+
+        body:
+          JSON.stringify(
+            payload
+          ),
+      }
+    );
+
+  const deploymentUrl =
+    deployment?.url
+      ? `https://${deployment.url}`
+      : null;
+
+  if (
+    !deploymentUrl
+  ) {
+    throw new Error(
+      "Vercel returned no deployment URL."
+    );
+  }
+
+  console.log(
+    `🌐 ${deploymentUrl}`
+  );
 
   return {
-    success: true,
-    projectName: generated.projectName,
-    projectDir: generated.projectDir,
-    files: generated.files,
-    verification: generated.verification,
-    build,
+    success:
+      true,
+
+    url:
+      deploymentUrl,
+
+    deploymentId:
+      deployment?.id ||
+      deployment?.uid ||
+      null,
+
+    state:
+      deployment?.readyState ||
+      "BUILDING",
   };
 }
 
-// ------------------------------------------------------------
-// Project name extraction
-// ------------------------------------------------------------
+// ============================================================
+// MAIN AGENT
+// ============================================================
 
-function extractProjectName(prompt) {
-  const text = String(prompt || "");
+async function runAgent(
+  userRequest
+) {
+  const request =
+    String(
+      userRequest || ""
+    ).trim();
 
-  const match =
-    text.match(
-      /(?:called|named|name\s+it|project\s+name)\s+["']?([a-zA-Z0-9 _-]{2,50})["']?/i
+  if (!request) {
+    throw new Error(
+      "User request is empty."
     );
-
-  if (match?.[1]) {
-    return match[1];
   }
 
-  const words = text
-    .toLowerCase()
-    .replace(/[^a-z0-9\s-]/g, " ")
-    .split(/\s+/)
-    .filter(Boolean);
+  console.log("");
+  console.log(
+    "=========================================="
+  );
 
-  const meaningful = words
-    .filter(
-      (word) =>
-        ![
-          "build",
-          "make",
-          "create",
-          "website",
-          "site",
-          "web",
-          "page",
-          "me",
-          "a",
-          "an",
-          "the",
-          "for",
-          "with",
-        ].includes(word)
-    )
-    .slice(0, 3);
+  console.log(
+    "🤖 AURA AGENT"
+  );
 
-  return meaningful.length
-    ? meaningful.join("-")
-    : "aura-site";
+  console.log(
+    "=========================================="
+  );
+
+  console.log(
+    `🎯 Goal: ${request}`
+  );
+
+  // ----------------------------------------------------------
+  // REQUIREMENTS
+  // ----------------------------------------------------------
+
+  let specification;
+
+  try {
+    specification =
+      await analyzeRequirements(
+        request
+      );
+  } catch (
+    error
+  ) {
+    console.log(
+      "⚠️ Planner fallback:"
+    );
+
+    console.log(
+      safeError(
+        error
+      )
+    );
+
+    specification =
+      fallbackRequirements(
+        request
+      );
+  }
+
+  const projectName =
+    sanitizeProjectName(
+      specification?.projectName ||
+        deriveProjectName(
+          request
+        )
+    );
+
+  const projectRoot =
+    ensureProject(
+      projectName
+    );
+
+  console.log(
+    `📦 Project: ${projectName}`
+  );
+
+  console.log(
+    `📍 Root: ${projectRoot}`
+  );
+
+  // ----------------------------------------------------------
+  // COMPLETE GENERATION
+  // ----------------------------------------------------------
+
+  const generation =
+    await generateFrontendFiles({
+      projectRoot,
+      projectName,
+      userRequest:
+        request,
+    });
+
+  // ----------------------------------------------------------
+  // FINAL VERIFY
+  // ----------------------------------------------------------
+
+  const validation =
+    verifyFrontend(
+      projectRoot
+    );
+
+  if (
+    !validation.success
+  ) {
+    return {
+      success:
+        false,
+
+      projectName,
+
+      projectRoot,
+
+      projectDir:
+        projectRoot,
+
+      files:
+        generation.files,
+
+      validationResult:
+        validation,
+
+      buildAgentResult: {
+        success:
+          false,
+
+        skipped:
+          true,
+      },
+
+      deploymentResult: {
+        success:
+          false,
+
+        skipped:
+          true,
+      },
+
+      liveUrl:
+        null,
+    };
+  }
+
+  // ----------------------------------------------------------
+  // Static build
+  // ----------------------------------------------------------
+
+  const buildResult = {
+    success:
+      true,
+
+    skipped:
+      true,
+
+    reason:
+      "Static HTML/CSS/JS application requires no npm build.",
+  };
+
+  return {
+    success:
+      true,
+
+    projectName,
+
+    projectRoot,
+
+    /*
+     * Keep both names for compatibility with
+     * older server.js versions.
+     */
+    projectDir:
+      projectRoot,
+
+    files:
+      generation.files,
+
+    validationResult:
+      validation,
+
+    buildAgentResult:
+      buildResult,
+
+    deploymentResult: {
+      success:
+        false,
+
+      skipped:
+        true,
+
+      reason:
+        "Waiting for Vercel deployment.",
+    },
+
+    liveUrl:
+      null,
+
+    repairAttempts:
+      MAX_REVIEW_REPAIRS,
+
+    specification:
+      generation.specification,
+  };
 }
 
-// ------------------------------------------------------------
-// Exports
-// ------------------------------------------------------------
+// ============================================================
+// EXPORTS
+// ============================================================
 
 module.exports = {
   runAgent,
-  askAI,
-  askGroq,
-  askOpenRouter,
 
   generateFrontendFiles,
-  ensureRequiredFrontendFiles,
 
-  buildFrontend,
   verifyFrontend,
 
   deployToVercel,
-  waitForVercelDeployment,
+
   uploadVercelFile,
 
   sanitizeProjectName,
-  normalizeFrontendFiles,
-  validateWebsiteFiles,
 
-  fallbackWebsite,
   redactSecrets,
-  isRateLimitError,
+
+  askAI,
+
+  validateStaticFiles,
+
+  listProjectFiles,
 };
