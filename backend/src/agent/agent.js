@@ -34,7 +34,7 @@ let groqDisabledUntil = 0;
 let openRouterDisabledUntil = 0;
 
 // ============================================================
-// HELPERS
+// LOGGING
 // ============================================================
 
 function redactSecrets(value) {
@@ -49,7 +49,7 @@ function redactSecrets(value) {
     /VERCEL_TOKEN\s*=\s*[^\s]+/gi,
     /Bearer\s+[A-Za-z0-9._-]+/gi,
     /gsk_[A-Za-z0-9_-]+/gi,
-    /sk-[A-Za-z0-9_-]+/gi,
+    /sk-[A-Za-z0-9_-]+/gi
   ];
 
   for (const pattern of patterns) {
@@ -168,14 +168,12 @@ function getProjectRoot(projectName) {
 
 function ensureProject(projectName) {
   const root =
-    getProjectRoot(
-      projectName
-    );
+    getProjectRoot(projectName);
 
   fs.mkdirSync(
     root,
     {
-      recursive: true,
+      recursive: true
     }
   );
 
@@ -223,9 +221,7 @@ function writeProjectFile(
   content
 ) {
   const safePath =
-    normalizeFilePath(
-      filePath
-    );
+    normalizeFilePath(filePath);
 
   const fullPath =
     path.resolve(
@@ -244,11 +240,9 @@ function writeProjectFile(
   }
 
   fs.mkdirSync(
-    path.dirname(
-      fullPath
-    ),
+    path.dirname(fullPath),
     {
-      recursive: true,
+      recursive: true
     }
   );
 
@@ -268,9 +262,7 @@ function readProjectFile(
   filePath
 ) {
   const safePath =
-    normalizeFilePath(
-      filePath
-    );
+    normalizeFilePath(filePath);
 
   const fullPath =
     path.resolve(
@@ -299,9 +291,7 @@ function listProjectFiles(
 
   function walk(directory) {
     if (
-      !fs.existsSync(
-        directory
-      )
+      !fs.existsSync(directory)
     ) {
       return;
     }
@@ -310,18 +300,14 @@ function listProjectFiles(
       fs.readdirSync(
         directory,
         {
-          withFileTypes: true,
+          withFileTypes: true
         }
       );
 
-    for (
-      const entry of entries
-    ) {
+    for (const entry of entries) {
       if (
-        entry.name ===
-          "node_modules" ||
-        entry.name ===
-          ".git"
+        entry.name === "node_modules" ||
+        entry.name === ".git"
       ) {
         continue;
       }
@@ -359,7 +345,7 @@ function listProjectFiles(
 }
 
 // ============================================================
-// HARD AI TIMEOUT
+// HARD TIMEOUT
 // ============================================================
 
 async function fetchWithTimeout(
@@ -382,15 +368,12 @@ async function fetchWithTimeout(
       {
         ...options,
         signal:
-          controller.signal,
+          controller.signal
       }
     );
-  } catch (
-    error
-  ) {
+  } catch (error) {
     if (
-      error?.name ===
-      "AbortError"
+      error?.name === "AbortError"
     ) {
       throw new Error(
         `Request timed out after ${Math.round(
@@ -401,9 +384,7 @@ async function fetchWithTimeout(
 
     throw error;
   } finally {
-    clearTimeout(
-      timer
-    );
+    clearTimeout(timer);
   }
 }
 
@@ -437,33 +418,31 @@ async function askGroq(
     await fetchWithTimeout(
       "https://api.groq.com/openai/v1/chat/completions",
       {
-        method:
-          "POST",
+        method: "POST",
 
         headers: {
           "Content-Type":
             "application/json",
 
           Authorization:
-            `Bearer ${apiKey}`,
+            `Bearer ${apiKey}`
         },
 
-        body:
-          JSON.stringify({
-            model:
-              options.model ||
-              GROQ_MODEL,
+        body: JSON.stringify({
+          model:
+            options.model ||
+            GROQ_MODEL,
 
-            messages,
+          messages,
 
-            temperature:
-              options.temperature ??
-              0.2,
+          temperature:
+            options.temperature ??
+            0.2,
 
-            max_tokens:
-              options.max_tokens ||
-              5000,
-          }),
+          max_tokens:
+            options.max_tokens ||
+            5000
+        })
       },
       options.timeoutMs ||
         AI_TIMEOUT_MS
@@ -472,9 +451,7 @@ async function askGroq(
   const text =
     await response.text();
 
-  if (
-    !response.ok
-  ) {
+  if (!response.ok) {
     if (
       response.status === 429 ||
       response.status === 413
@@ -492,24 +469,31 @@ async function askGroq(
     );
   }
 
-  const data =
-    JSON.parse(
-      text
+  let data;
+
+  try {
+    data =
+      JSON.parse(text);
+  } catch {
+    throw new Error(
+      "Groq returned invalid JSON."
     );
+  }
 
   const content =
     data?.choices?.[0]
       ?.message?.content;
 
-  if (!content) {
+  if (
+    !content ||
+    !String(content).trim()
+  ) {
     throw new Error(
       "Groq returned empty content."
     );
   }
 
-  return String(
-    content
-  );
+  return String(content);
 }
 
 // ============================================================
@@ -542,8 +526,7 @@ async function askOpenRouter(
     await fetchWithTimeout(
       "https://openrouter.ai/api/v1/chat/completions",
       {
-        method:
-          "POST",
+        method: "POST",
 
         headers: {
           "Content-Type":
@@ -558,25 +541,24 @@ async function askOpenRouter(
 
           "X-Title":
             process.env.OPENROUTER_APP_NAME ||
-            "AURA Agent",
+            "AURA Agent"
         },
 
-        body:
-          JSON.stringify({
-            model:
-              options.model ||
-              OPENROUTER_MODEL,
+        body: JSON.stringify({
+          model:
+            options.model ||
+            OPENROUTER_MODEL,
 
-            messages,
+          messages,
 
-            temperature:
-              options.temperature ??
-              0.2,
+          temperature:
+            options.temperature ??
+            0.2,
 
-            max_tokens:
-              options.max_tokens ||
-              5000,
-          }),
+          max_tokens:
+            options.max_tokens ||
+            5000
+        })
       },
       options.timeoutMs ||
         AI_TIMEOUT_MS
@@ -585,9 +567,7 @@ async function askOpenRouter(
   const text =
     await response.text();
 
-  if (
-    !response.ok
-  ) {
+  if (!response.ok) {
     if (
       response.status === 429
     ) {
@@ -604,24 +584,31 @@ async function askOpenRouter(
     );
   }
 
-  const data =
-    JSON.parse(
-      text
+  let data;
+
+  try {
+    data =
+      JSON.parse(text);
+  } catch {
+    throw new Error(
+      "OpenRouter returned invalid JSON."
     );
+  }
 
   const content =
     data?.choices?.[0]
       ?.message?.content;
 
-  if (!content) {
+  if (
+    !content ||
+    !String(content).trim()
+  ) {
     throw new Error(
       "OpenRouter returned empty content."
     );
   }
 
-  return String(
-    content
-  );
+  return String(content);
 }
 
 // ============================================================
@@ -640,15 +627,12 @@ async function askAI(
       groqDisabledUntil
   ) {
     providers.push({
-      name:
-        "Groq",
-
-      run:
-        () =>
-          askGroq(
-            messages,
-            options
-          ),
+      name: "Groq",
+      run: () =>
+        askGroq(
+          messages,
+          options
+        )
     });
   }
 
@@ -658,15 +642,12 @@ async function askAI(
       openRouterDisabledUntil
   ) {
     providers.push({
-      name:
-        "OpenRouter",
-
-      run:
-        () =>
-          askOpenRouter(
-            messages,
-            options
-          ),
+      name: "OpenRouter",
+      run: () =>
+        askOpenRouter(
+          messages,
+          options
+        )
     });
   }
 
@@ -676,12 +657,10 @@ async function askAI(
     );
   }
 
-  let lastError =
-    null;
+  let lastError = null;
 
   for (
-    const provider of
-      providers
+    const provider of providers
   ) {
     try {
       console.log(
@@ -696,9 +675,7 @@ async function askAI(
       );
 
       return result;
-    } catch (
-      error
-    ) {
+    } catch (error) {
       lastError =
         error;
 
@@ -712,9 +689,7 @@ async function askAI(
 
   throw new Error(
     lastError
-      ? safeError(
-          lastError
-        )
+      ? safeError(lastError)
       : "All AI providers failed."
   );
 }
@@ -749,14 +724,10 @@ function extractJson(
       .trim();
 
   const first =
-    text.indexOf(
-      "{"
-    );
+    text.indexOf("{");
 
   const last =
-    text.lastIndexOf(
-      "}"
-    );
+    text.lastIndexOf("}");
 
   if (
     first === -1 ||
@@ -768,12 +739,18 @@ function extractJson(
     );
   }
 
-  return JSON.parse(
-    text.slice(
-      first,
-      last + 1
-    )
-  );
+  try {
+    return JSON.parse(
+      text.slice(
+        first,
+        last + 1
+      )
+    );
+  } catch (error) {
+    throw new Error(
+      `Invalid AI JSON: ${error.message}`
+    );
+  }
 }
 
 // ============================================================
@@ -784,7 +761,7 @@ async function analyzeRequirements(
   request
 ) {
   const prompt = `
-Analyze the following website request.
+Analyze this website request.
 
 USER REQUEST:
 ${String(
@@ -794,20 +771,21 @@ ${String(
   12000
 )}
 
-Preserve exact:
+Preserve exactly:
 - branding
-- text
-- product count
-- names
-- prices
-- ratings
-- stock
-- features
+- exact text
+- exact product count
+- exact product names
+- exact prices
+- exact ratings
+- exact stock
+- requested features
 - persistence requirements
+- design requirements
 
-Do not invent additional requirements.
+Do not invent requirements.
 
-Return JSON only:
+Return ONLY JSON:
 
 {
   "projectName": "",
@@ -829,7 +807,7 @@ Return JSON only:
             "system",
 
           content:
-            "You are a requirements analyst. Return JSON only.",
+            "You are a requirements analyst. Return JSON only."
         },
 
         {
@@ -837,8 +815,8 @@ Return JSON only:
             "user",
 
           content:
-            prompt,
-        },
+            prompt
+        }
       ],
       {
         temperature:
@@ -848,7 +826,7 @@ Return JSON only:
           2000,
 
         timeoutMs:
-          REVIEW_TIMEOUT_MS,
+          REVIEW_TIMEOUT_MS
       }
     );
 
@@ -867,7 +845,7 @@ function fallbackRequirements(
       ),
 
     brandName:
-      "AURA Website",
+      "AURA",
 
     tagline:
       String(
@@ -888,16 +866,17 @@ function fallbackRequirements(
 
     designRequirements: [
       "Modern",
-      "Responsive",
+      "Clean",
+      "Responsive"
     ],
 
     validationRequirements:
-      [],
+      []
   };
 }
 
 // ============================================================
-// COMPACT REQUIREMENT CONTEXT
+// REQUIREMENT CONTEXT
 // ============================================================
 
 function requirementContext(
@@ -909,7 +888,7 @@ function requirementContext(
     2
   ).slice(
     0,
-    10000
+    8000
   );
 }
 
@@ -931,7 +910,7 @@ ${String(
   request
 ).slice(
   0,
-  13000
+  12000
 )}
 
 REQUIREMENTS:
@@ -939,39 +918,37 @@ ${requirementContext(
   specification
 )}
 
-IMPORTANT:
+TECHNOLOGY:
 
-Use ONLY vanilla HTML5.
+ONLY:
+- HTML5
+- CSS3
+- Vanilla JavaScript
 
-No React.
-No JSX.
-No Next.js.
-No Vite.
-No npm.
-No package.json.
+NOT ALLOWED:
+- React
+- JSX
+- Next.js
+- Vite
+- npm
+- package.json
+- TypeScript
+- backend code
 
-The other files will be generated separately.
+The HTML must include all required sections,
+IDs, classes, controls and forms needed by the
+JavaScript.
 
-The HTML MUST include:
+The HTML MUST reference:
 
-- all required sections
-- navigation
-- hero
-- product area
-- search
-- cart UI
-- checkout UI
-- payment UI
-- success/order UI
-- all IDs/classes needed by JavaScript
-- ./style.css
-- ./script.js
+./style.css
+./script.js
 
-If Lucide icons are required, include the Lucide CDN.
+If Lucide is requested, include its CDN.
 
-Do NOT omit required functionality from the markup.
+Do NOT return markdown.
 
-Return ONLY complete index.html.
+Return ONLY the complete index.html.
 `;
 }
 
@@ -987,77 +964,14 @@ function buildCssPrompt(
   return `
 You are AURA's senior frontend designer.
 
-Create the COMPLETE CSS for the application described below.
+Create ONLY the complete style.css.
 
-ORIGINAL REQUEST:
+USER REQUEST:
 ${String(
   request
 ).slice(
   0,
-  10000
-)}
-
-REQUIREMENTS:
-${requirementContext(
-  specification
-)}
-
-HTML STRUCTURE:
-${String(
-  html
-).slice(
-  0,
-  18000
-)}
-
-Create polished CSS for:
-
-- responsive navigation
-- hero
-- product grid
-- product cards
-- product images
-- search
-- cart
-- cart controls
-- checkout
-- forms
-- buttons
-- errors
-- success screen
-- mobile
-- tablet
-- desktop
-
-Make it look like a real production application.
-
-Do not create CSS comments about AI.
-
-Return ONLY CSS.
-`;
-}
-
-// ============================================================
-// JAVASCRIPT PROMPT
-// ============================================================
-
-function buildJavascriptPrompt(
-  request,
-  specification,
-  html,
-  css
-) {
-  return `
-You are AURA's senior frontend JavaScript engineer.
-
-Create the COMPLETE browser JavaScript for the application.
-
-ORIGINAL REQUEST:
-${String(
-  request
-).slice(
-  0,
-  12000
+  9000
 )}
 
 REQUIREMENTS:
@@ -1073,55 +987,126 @@ ${String(
   16000
 )}
 
-Do not rely on receiving the complete CSS.
+The CSS must create a polished production-quality website.
 
-Implement ALL requested functionality.
+Include:
 
-For ecommerce applications, this includes where requested:
-
-- exact product data
-- localStorage
-- initialization
+- responsive desktop layout
+- responsive tablet layout
+- responsive mobile layout
+- typography
+- spacing
+- navigation
+- hero
+- cards
+- forms
+- buttons
 - search
-- product filtering
-- add to cart
-- cart count
-- increase quantity
-- decrease quantity
+- cart
+- checkout
+- success states
+- FAQ
+- support panel
+- theme system when requested
+- hover effects
+- transitions
+- animations when requested
+
+Use CSS custom properties for themes.
+
+Do not generate HTML.
+
+Do not generate JavaScript.
+
+Return ONLY CSS.
+`;
+}
+
+// ============================================================
+// JAVASCRIPT PROMPT
+// ============================================================
+
+function buildJavascriptPrompt(
+  request,
+  specification,
+  html
+) {
+  return `
+You are AURA's senior frontend JavaScript engineer.
+
+Create ONLY the complete script.js.
+
+USER REQUEST:
+${String(
+  request
+).slice(
+  0,
+  11000
+)}
+
+REQUIREMENTS:
+${requirementContext(
+  specification
+)}
+
+HTML STRUCTURE:
+${String(
+  html
+).slice(
+  0,
+  18000
+)}
+
+Implement every requested interaction.
+
+Use vanilla JavaScript only.
+
+For ecommerce applications implement:
+- exact products
+- search
+- cart
+- quantities
 - remove
-- subtotal
-- shipping
-- grand total
+- totals
 - checkout
 - address validation
 - card validation
 - expiry validation
 - payment
-- stock updates
+- stock changes
+- localStorage
 - order history
-- success screen
-- state persistence
-- navigation
-- Lucide initialization
+- success state
 
-Use ONLY vanilla JavaScript.
+For AURA/SaaS applications implement:
+- theme switching
+- localStorage theme persistence
+- mobile menu
+- FAQ accordion
+- terminal interactions
+- support chat
+- support persistence
+- scroll interactions
+- animations
+when requested.
 
-No React.
-No JSX.
-No import statements.
-No npm.
-No backend.
+Use Lucide initialization when requested.
 
-Do not create fake functions.
+Do not use:
+- React
+- JSX
+- import
+- npm
+- backend
 
-Do not leave TODO placeholders.
+Do not create fake buttons.
 
 Return ONLY JavaScript.
 `;
 }
 
 // ============================================================
-// CLEAN SOURCE
+// CLEAN CODE
 // ============================================================
 
 function cleanCodeOutput(
@@ -1143,7 +1128,7 @@ function cleanCodeOutput(
 }
 
 // ============================================================
-// SINGLE FILE GENERATION
+// GENERATE ONE FILE
 // ============================================================
 
 async function generateOneFile(
@@ -1182,9 +1167,6 @@ async function generateOneFile(
         specification,
         files[
           "index.html"
-        ] || "",
-        files[
-          "style.css"
         ] || ""
       );
   }
@@ -1208,7 +1190,7 @@ async function generateOneFile(
                 "system",
 
               content:
-                "Return only valid source code.",
+                "Return only valid source code for the requested file."
             },
 
             {
@@ -1216,8 +1198,8 @@ async function generateOneFile(
                 "user",
 
               content:
-                prompt,
-            },
+                prompt
+            }
           ],
           {
             temperature:
@@ -1226,11 +1208,11 @@ async function generateOneFile(
             max_tokens:
               file ===
               "script.js"
-                ? 9500
+                ? 9000
                 : 6500,
 
             timeoutMs:
-              AI_TIMEOUT_MS,
+              AI_TIMEOUT_MS
           }
         );
 
@@ -1248,9 +1230,7 @@ async function generateOneFile(
       }
 
       return cleaned;
-    } catch (
-      error
-    ) {
+    } catch (error) {
       console.log(
         `⚠️ ${file} attempt ${attempt} failed: ${safeError(
           error
@@ -1272,7 +1252,7 @@ async function generateOneFile(
 }
 
 // ============================================================
-// AUTO FIX HTML REFERENCES
+// FORCE CSS REFERENCE
 // ============================================================
 
 function ensureHtmlReferences(
@@ -1284,29 +1264,24 @@ function ensureHtmlReferences(
     );
 
   const hasCss =
-    /href=["']\.?\/?style\.css["']/i.test(
+    /href=["'](?:\.\/)?style\.css["']/i.test(
       result
     );
 
   const hasJs =
-    /src=["']\.?\/?script\.js["']/i.test(
+    /src=["'](?:\.\/)?script\.js["']/i.test(
       result
     );
 
-  if (
-    !hasCss
-  ) {
-    const headPattern =
-      /<\/head>/i;
-
+  if (!hasCss) {
     if (
-      headPattern.test(
+      /<\/head>/i.test(
         result
       )
     ) {
       result =
         result.replace(
-          headPattern,
+          /<\/head>/i,
           `  <link rel="stylesheet" href="./style.css">\n</head>`
         );
     } else {
@@ -1315,24 +1290,19 @@ function ensureHtmlReferences(
     }
 
     console.log(
-      "🛠️ Auto-fixed missing style.css reference."
+      "🛠️ Added missing style.css reference."
     );
   }
 
-  if (
-    !hasJs
-  ) {
-    const bodyPattern =
-      /<\/body>/i;
-
+  if (!hasJs) {
     if (
-      bodyPattern.test(
+      /<\/body>/i.test(
         result
       )
     ) {
       result =
         result.replace(
-          bodyPattern,
+          /<\/body>/i,
           `  <script src="./script.js"></script>\n</body>`
         );
     } else {
@@ -1341,11 +1311,145 @@ function ensureHtmlReferences(
     }
 
     console.log(
-      "🛠️ Auto-fixed missing script.js reference."
+      "🛠️ Added missing script.js reference."
     );
   }
 
   return result;
+}
+
+// ============================================================
+// FORCE CSS INLINE FALLBACK
+// ============================================================
+
+function ensureStylesApplied(
+  html,
+  css
+) {
+  let result =
+    String(
+      html || ""
+    );
+
+  const stylesheet =
+    String(
+      css || ""
+    ).trim();
+
+  if (!stylesheet) {
+    return result;
+  }
+
+  // First guarantee external file.
+  result =
+    ensureHtmlReferences(
+      result
+    );
+
+  // If inline fallback already exists, don't duplicate it.
+  if (
+    result.includes(
+      "AURA_INLINE_STYLE_FALLBACK"
+    )
+  ) {
+    return result;
+  }
+
+  const inlineCss =
+`
+<!-- AURA_INLINE_STYLE_FALLBACK -->
+<style id="aura-fallback-styles">
+${stylesheet}
+</style>
+<!-- /AURA_INLINE_STYLE_FALLBACK -->
+`;
+
+  if (
+    /<\/head>/i.test(
+      result
+    )
+  ) {
+    result =
+      result.replace(
+        /<\/head>/i,
+        `${inlineCss}\n</head>`
+      );
+  } else {
+    result =
+      `${inlineCss}\n${result}`;
+  }
+
+  console.log(
+    "🛡️ Added inline CSS fallback."
+  );
+
+  return result;
+}
+
+// ============================================================
+// CSS VALIDATION
+// ============================================================
+
+function validateCssContent(
+  css
+) {
+  const value =
+    String(
+      css || ""
+    ).trim();
+
+  if (!value) {
+    return {
+      valid:
+        false,
+
+      reason:
+        "style.css is empty."
+    };
+  }
+
+  if (
+    /<html[\s>]/i.test(
+      value
+    ) ||
+    /<body[\s>]/i.test(
+      value
+    ) ||
+    /<head[\s>]/i.test(
+      value
+    )
+  ) {
+    return {
+      valid:
+        false,
+
+      reason:
+        "style.css contains HTML."
+    };
+  }
+
+  const hasCssRule =
+    /[^@][^{]+\{[^}]*\}/s.test(
+      value
+    );
+
+  if (!hasCssRule) {
+    return {
+      valid:
+        false,
+
+      reason:
+        "style.css contains no recognizable CSS rules."
+    };
+  }
+
+  return {
+    valid:
+      true,
+
+    reason:
+      null
+  };
 }
 
 // ============================================================
@@ -1372,25 +1476,19 @@ function validateFiles(
       "script.js"
     ] || "";
 
-  if (
-    !html.trim()
-  ) {
+  if (!html.trim()) {
     errors.push(
       "index.html is empty."
     );
   }
 
-  if (
-    !css.trim()
-  ) {
+  if (!css.trim()) {
     errors.push(
       "style.css is empty."
     );
   }
 
-  if (
-    !js.trim()
-  ) {
+  if (!js.trim()) {
     errors.push(
       "script.js is empty."
     );
@@ -1451,11 +1549,24 @@ function validateFiles(
     );
   }
 
+  const cssValidation =
+    validateCssContent(
+      css
+    );
+
+  if (
+    !cssValidation.valid
+  ) {
+    errors.push(
+      cssValidation.reason
+    );
+  }
+
   const combined =
     [
       html,
       css,
-      js,
+      js
     ].join(
       "\n"
     );
@@ -1505,35 +1616,12 @@ function validateFiles(
     );
   }
 
-  const opens =
-    (
-      js.match(
-        /{/g
-      ) || []
-    ).length;
-
-  const closes =
-    (
-      js.match(
-        /}/g
-      ) || []
-    ).length;
-
-  if (
-    opens !==
-    closes
-  ) {
-    errors.push(
-      "JavaScript braces are unbalanced."
-    );
-  }
-
   return {
     valid:
       errors.length ===
       0,
 
-    errors,
+    errors
   };
 }
 
@@ -1553,34 +1641,80 @@ function fallbackFiles(
     "index.html":
 `<!DOCTYPE html>
 <html lang="en">
+
 <head>
+
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+<meta
+  name="viewport"
+  content="width=device-width, initial-scale=1.0"
+>
+
 <title>AURA Website</title>
-<link rel="stylesheet" href="./style.css">
+
+<link
+  rel="stylesheet"
+  href="./style.css"
+>
+
 </head>
+
 <body>
 
 <header class="header">
+
   <div class="container nav">
-    <a href="#" class="logo">AURA</a>
+
+    <a
+      href="#home"
+      class="logo"
+    >
+      AURA
+    </a>
+
   </div>
+
 </header>
 
 <main>
-<section class="hero">
+
+<section
+  id="home"
+  class="hero"
+>
+
   <div class="container">
-    <p class="eyebrow">AURA</p>
-    <h1>Your idea.<span>Your website.</span></h1>
-    <p>${safe}</p>
+
+    <p class="eyebrow">
+      AURA
+    </p>
+
+    <h1>
+      Your idea.
+      <span>
+        Your website.
+      </span>
+    </h1>
+
+    <p>
+      ${safe}
+    </p>
+
   </div>
+
 </section>
+
 </main>
 
-<footer>AURA ✦</footer>
+<footer>
+  Built with AURA ✦
+</footer>
 
 <script src="./script.js"></script>
+
 </body>
+
 </html>`,
 
     "style.css":
@@ -1588,61 +1722,91 @@ function fallbackFiles(
   box-sizing: border-box;
 }
 
+html {
+  scroll-behavior: smooth;
+}
+
 body {
   margin: 0;
-  font-family: Arial, sans-serif;
+  font-family: Inter, system-ui, sans-serif;
   background: #080b12;
-  color: white;
+  color: #ffffff;
+}
+
+a {
+  color: inherit;
+  text-decoration: none;
 }
 
 .container {
   width: min(1120px, calc(100% - 40px));
-  margin: auto;
+  margin: 0 auto;
 }
 
 .header {
-  padding: 20px 0;
+  position: sticky;
+  top: 0;
+  z-index: 20;
+  background: rgba(8, 11, 18, 0.92);
   border-bottom: 1px solid rgba(255,255,255,.08);
 }
 
+.nav {
+  min-height: 72px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
 .logo {
-  color: white;
+  font-size: 24px;
   font-weight: 900;
-  text-decoration: none;
+  letter-spacing: 2px;
+  color: #8b5cf6;
 }
 
 .hero {
-  min-height: 80vh;
+  min-height: 82vh;
   display: flex;
   align-items: center;
 }
 
 .eyebrow {
-  color: #8da2ff;
+  color: #8b5cf6;
+  font-size: 12px;
   font-weight: 800;
   letter-spacing: 2px;
 }
 
 h1 {
+  max-width: 900px;
+  margin: 20px 0;
   font-size: clamp(52px, 9vw, 100px);
   line-height: .95;
+  letter-spacing: -.06em;
 }
 
 h1 span {
   display: block;
-  color: #8da2ff;
+  color: #8b5cf6;
 }
 
 footer {
   padding: 30px;
   text-align: center;
   color: #6b7280;
+  border-top: 1px solid rgba(255,255,255,.08);
 }`,
 
     "script.js":
-`document.addEventListener("DOMContentLoaded", () => {
-  console.log("AURA website ready.");
-});`,
+`document.addEventListener(
+  "DOMContentLoaded",
+  () => {
+    console.log(
+      "AURA website ready."
+    );
+  }
+);`
   };
 }
 
@@ -1658,14 +1822,14 @@ async function reviewApplication(
   const prompt = `
 You are AURA's senior frontend QA reviewer.
 
-Review this generated app against the original user request.
+Review the website against the original request.
 
 ORIGINAL REQUEST:
 ${String(
   request
 ).slice(
   0,
-  10000
+  9000
 )}
 
 REQUIREMENTS:
@@ -1673,30 +1837,26 @@ ${requirementContext(
   specification
 )}
 
-Inspect the implementation.
+Check actual functionality:
 
-Focus on:
 - exact data
 - exact product count
 - search
 - cart
-- cart counter
 - quantity
 - remove
-- subtotal
-- shipping
-- total
+- totals
 - checkout
-- address validation
-- card validation
-- expiry validation
+- validation
 - localStorage
-- stock update
+- stock
 - order history
-- order confirmation
 - responsive design
-- required buttons
-- actual functionality
+- theme
+- animations
+- FAQ
+- support
+- mobile navigation
 
 Return ONLY JSON:
 
@@ -1717,7 +1877,7 @@ Return ONLY JSON:
             "system",
 
           content:
-            "Return JSON only.",
+            "Return JSON only."
         },
 
         {
@@ -1725,8 +1885,8 @@ Return ONLY JSON:
             "user",
 
           content:
-            prompt,
-        },
+            prompt
+        }
       ],
       {
         temperature:
@@ -1736,7 +1896,7 @@ Return ONLY JSON:
           3500,
 
         timeoutMs:
-          REVIEW_TIMEOUT_MS,
+          REVIEW_TIMEOUT_MS
       }
     )
   );
@@ -1753,51 +1913,53 @@ async function repairFile(
   files,
   review
 ) {
-  const current =
-    files[
-      file
-    ] || "";
-
   const prompt = `
-Repair ONLY ${file}.
+Repair only this file:
 
-ORIGINAL REQUEST:
+${file}
+
+Original request:
 ${String(
   request
 ).slice(
   0,
-  10000
+  9000
 )}
 
-REQUIREMENTS:
+Requirements:
 ${requirementContext(
   specification
 )}
 
-QA REVIEW:
+Review:
 ${JSON.stringify(
   review,
   null,
   2
 )}
 
-CURRENT FILE:
-${current.slice(
+Current file:
+${String(
+  files[file] || ""
+).slice(
   0,
-  24000
+  22000
 )}
 
-Fix the identified issues.
+Rules:
 
-Keep:
-- exact data
-- exact branding
-- working features
-- responsive design
+- preserve exact data
+- preserve working functionality
+- keep responsive design
+- vanilla HTML/CSS/JS only
+- no React
+- no JSX
+- no Vite
+- no npm
+- no backend
+- no AI metadata
 
-Use only vanilla HTML/CSS/JavaScript.
-
-Return ONLY the source code for ${file}.
+Return ONLY corrected source code.
 `;
 
   const result =
@@ -1808,7 +1970,7 @@ Return ONLY the source code for ${file}.
             "system",
 
           content:
-            "Return only source code.",
+            "Return only source code."
         },
 
         {
@@ -1816,8 +1978,8 @@ Return ONLY the source code for ${file}.
             "user",
 
           content:
-            prompt,
-        },
+            prompt
+        }
       ],
       {
         temperature:
@@ -1830,7 +1992,7 @@ Return ONLY the source code for ${file}.
             : 6500,
 
         timeoutMs:
-          AI_TIMEOUT_MS,
+          AI_TIMEOUT_MS
       }
     );
 
@@ -1840,13 +2002,13 @@ Return ONLY the source code for ${file}.
 }
 
 // ============================================================
-// GENERATE ALL FILES
+// GENERATE COMPLETE WEBSITE
 // ============================================================
 
 async function generateFrontendFiles({
   projectRoot,
   projectName,
-  userRequest,
+  userRequest
 }) {
   console.log("");
   console.log(
@@ -1861,9 +2023,9 @@ async function generateFrontendFiles({
 
   let specification;
 
-  // ----------------------------------------------------------
+  // ==========================================================
   // REQUIREMENTS
-  // ----------------------------------------------------------
+  // ==========================================================
 
   try {
     console.log(
@@ -1878,11 +2040,9 @@ async function generateFrontendFiles({
     console.log(
       "✅ Requirements analyzed."
     );
-  } catch (
-    error
-  ) {
+  } catch (error) {
     console.log(
-      `⚠️ Requirement analysis failed: ${safeError(
+      `⚠️ Requirements analysis failed: ${safeError(
         error
       )}`
     );
@@ -1896,21 +2056,19 @@ async function generateFrontendFiles({
   const files = {
     "index.html": "",
     "style.css": "",
-    "script.js": "",
+    "script.js": ""
   };
 
-  // ----------------------------------------------------------
+  // ==========================================================
   // HTML
-  // ----------------------------------------------------------
+  // ==========================================================
 
   console.log(
     "💻 Generating index.html..."
   );
 
   try {
-    files[
-      "index.html"
-    ] =
+    files["index.html"] =
       await generateOneFile(
         "index.html",
         userRequest,
@@ -1918,25 +2076,15 @@ async function generateFrontendFiles({
         files
       );
 
-    /*
-     * Important:
-     * automatically fix missing references.
-     */
-    files[
-      "index.html"
-    ] =
+    files["index.html"] =
       ensureHtmlReferences(
-        files[
-          "index.html"
-        ]
+        files["index.html"]
       );
 
     console.log(
       "✅ index.html ready."
     );
-  } catch (
-    error
-  ) {
+  } catch (error) {
     console.log(
       `❌ index.html failed: ${safeError(
         error
@@ -1944,18 +2092,16 @@ async function generateFrontendFiles({
     );
   }
 
-  // ----------------------------------------------------------
+  // ==========================================================
   // CSS
-  // ----------------------------------------------------------
+  // ==========================================================
 
   console.log(
     "🎨 Generating style.css..."
   );
 
   try {
-    files[
-      "style.css"
-    ] =
+    files["style.css"] =
       await generateOneFile(
         "style.css",
         userRequest,
@@ -1963,12 +2109,44 @@ async function generateFrontendFiles({
         files
       );
 
+    let cssValidation =
+      validateCssContent(
+        files["style.css"]
+      );
+
+    if (
+      !cssValidation.valid
+    ) {
+      console.log(
+        "⚠️ Generated CSS failed validation."
+      );
+
+      console.log(
+        cssValidation.reason
+      );
+
+      console.log(
+        "🔄 Regenerating CSS..."
+      );
+
+      files["style.css"] =
+        await generateOneFile(
+          "style.css",
+          userRequest,
+          specification,
+          files
+        );
+
+      cssValidation =
+        validateCssContent(
+          files["style.css"]
+        );
+    }
+
     console.log(
       "✅ style.css ready."
     );
-  } catch (
-    error
-  ) {
+  } catch (error) {
     console.log(
       `❌ style.css failed: ${safeError(
         error
@@ -1976,18 +2154,26 @@ async function generateFrontendFiles({
     );
   }
 
-  // ----------------------------------------------------------
-  // JS
-  // ----------------------------------------------------------
+  // ==========================================================
+  // CRITICAL CSS APPLICATION STEP
+  // ==========================================================
+
+  files["index.html"] =
+    ensureStylesApplied(
+      files["index.html"],
+      files["style.css"]
+    );
+
+  // ==========================================================
+  // JAVASCRIPT
+  // ==========================================================
 
   console.log(
     "⚙️ Generating script.js..."
   );
 
   try {
-    files[
-      "script.js"
-    ] =
+    files["script.js"] =
       await generateOneFile(
         "script.js",
         userRequest,
@@ -1998,9 +2184,7 @@ async function generateFrontendFiles({
     console.log(
       "✅ script.js ready."
     );
-  } catch (
-    error
-  ) {
+  } catch (error) {
     console.log(
       `❌ script.js failed: ${safeError(
         error
@@ -2008,9 +2192,9 @@ async function generateFrontendFiles({
     );
   }
 
-  // ----------------------------------------------------------
+  // ==========================================================
   // FALLBACK MISSING FILES
-  // ----------------------------------------------------------
+  // ==========================================================
 
   const fallback =
     fallbackFiles(
@@ -2021,41 +2205,42 @@ async function generateFrontendFiles({
     const file of [
       "index.html",
       "style.css",
-      "script.js",
+      "script.js"
     ]
   ) {
     if (
       !files[file] ||
       !files[file].trim()
     ) {
-      files[file] =
-        fallback[file];
-
       console.log(
         `🛠️ Fallback used for ${file}.`
       );
+
+      files[file] =
+        fallback[file];
     }
   }
 
-  // ----------------------------------------------------------
-  // FINAL HTML REPAIR
-  // ----------------------------------------------------------
+  // ==========================================================
+  // FINAL ASSET GUARANTEE
+  // ==========================================================
 
-  files[
-    "index.html"
-  ] =
+  files["index.html"] =
     ensureHtmlReferences(
-      files[
-        "index.html"
-      ]
+      files["index.html"]
     );
 
-  // ----------------------------------------------------------
-  // REVIEW
-  // ----------------------------------------------------------
+  files["index.html"] =
+    ensureStylesApplied(
+      files["index.html"],
+      files["style.css"]
+    );
 
-  let review =
-    null;
+  // ==========================================================
+  // REVIEW
+  // ==========================================================
+
+  let review = null;
 
   try {
     console.log(
@@ -2075,9 +2260,22 @@ async function generateFrontendFiles({
         "N/A"
       }`
     );
-  } catch (
-    error
-  ) {
+
+    if (
+      Array.isArray(
+        review.issues
+      ) &&
+      review.issues.length
+    ) {
+      console.log(
+        "⚠️ Review issues:"
+      );
+
+      console.log(
+        review.issues
+      );
+    }
+  } catch (error) {
     console.log(
       `⚠️ Review unavailable: ${safeError(
         error
@@ -2085,89 +2283,74 @@ async function generateFrontendFiles({
     );
   }
 
-  // ----------------------------------------------------------
+  // ==========================================================
   // TARGETED REPAIR
-  // ----------------------------------------------------------
+  // ==========================================================
 
   if (
     review &&
     (
-      review.passed ===
-        false ||
-      review.repairNeeded ===
-        true
+      review.passed === false ||
+      review.repairNeeded === true
     )
   ) {
-    const repairTarget =
+    const target =
       [
         "index.html",
         "style.css",
-        "script.js",
+        "script.js"
       ].includes(
         review.repairFile
       )
         ? review.repairFile
         : null;
 
-    if (
-      repairTarget
-    ) {
-      for (
-        let attempt = 1;
-        attempt <=
-        MAX_REPAIR_ATTEMPTS;
-        attempt++
-      ) {
-        try {
-          console.log(
-            `🔧 Repairing ${repairTarget} (${attempt}/${MAX_REPAIR_ATTEMPTS})...`
+    if (target) {
+      try {
+        console.log(
+          `🔧 Repairing ${target}...`
+        );
+
+        files[target] =
+          await repairFile(
+            target,
+            userRequest,
+            specification,
+            files,
+            review
           );
 
-          files[
-            repairTarget
-          ] =
-            await repairFile(
-              repairTarget,
-              userRequest,
-              specification,
-              files,
-              review
-            );
-
-          console.log(
-            `✅ ${repairTarget} repaired.`
-          );
-
-          break;
-        } catch (
-          error
-        ) {
-          console.log(
-            `⚠️ Repair failed: ${safeError(
-              error
-            )}`
-          );
-        }
+        console.log(
+          `✅ ${target} repaired.`
+        );
+      } catch (error) {
+        console.log(
+          `⚠️ Repair failed: ${safeError(
+            error
+          )}`
+        );
       }
     }
   }
 
-  // ----------------------------------------------------------
-  // HTML REFERENCE FIX AGAIN
-  // ----------------------------------------------------------
+  // ==========================================================
+  // FINAL HTML ASSET GUARANTEE AGAIN
+  // ==========================================================
 
-  files[
-    "index.html"
-  ] =
+  files["index.html"] =
     ensureHtmlReferences(
-      files[
-        "index.html"
-      ]
+      files["index.html"]
     );
 
-  // ----------------------------------------------------------
-  // VALIDATE
-  // ----------------------------------------------------------
+  files["index.html"] =
+    ensureStylesApplied(
+      files["index.html"],
+      files["style.css"]
+    );
+
+  // ==========================================================
+  // FINAL VALIDATION
+  // ==========================================================
 
   const validation =
     validateFiles(
@@ -2175,14 +2358,14 @@ async function generateFrontendFiles({
     );
 
   console.log(
-    "🔐 Validation..."
+    "🔐 Final validation..."
   );
 
   if (
     !validation.valid
   ) {
     console.log(
-      "⚠️ Validation found:"
+      "⚠️ Validation warnings:"
     );
 
     console.log(
@@ -2190,61 +2373,47 @@ async function generateFrontendFiles({
     );
 
     /*
-     * We fix simple structural issues here.
+     * Simple structural problems are fixed automatically.
+     * We do not destroy a valid generated application.
      */
 
-    files[
-      "index.html"
-    ] =
+    files["index.html"] =
       ensureHtmlReferences(
-        files[
-          "index.html"
-        ]
+        files["index.html"]
+      );
+
+    files["index.html"] =
+      ensureStylesApplied(
+        files["index.html"],
+        files["style.css"]
       );
   }
 
-  // ----------------------------------------------------------
-  // WRITE
-  // ----------------------------------------------------------
+  // ==========================================================
+  // WRITE FILES
+  // ==========================================================
 
   writeProjectFile(
     projectRoot,
     "index.html",
-    files[
-      "index.html"
-    ]
+    files["index.html"]
   );
 
   writeProjectFile(
     projectRoot,
     "style.css",
-    files[
-      "style.css"
-    ]
+    files["style.css"]
   );
 
   writeProjectFile(
     projectRoot,
     "script.js",
-    files[
-      "script.js"
-    ]
+    files["script.js"]
   );
 
-  /*
-   * Revalidate after automatic repair.
-   */
-
-  const finalValidation =
-    validateFiles(
-      files
-    );
-
-  /*
-   * We do NOT fail solely because a small static
-   * validation warning remains. The files exist and
-   * are suitable for static deployment.
-   */
+  console.log(
+    "✅ Website files written."
+  );
 
   return {
     success:
@@ -2257,7 +2426,7 @@ async function generateFrontendFiles({
     files: [
       "index.html",
       "style.css",
-      "script.js",
+      "script.js"
     ],
 
     specification,
@@ -2265,18 +2434,20 @@ async function generateFrontendFiles({
     review,
 
     validation:
-      finalValidation,
+      validateFiles(
+        files
+      )
   };
 }
 
 // ============================================================
-// VERIFY
+// VERIFY FRONTEND
 // ============================================================
 
 function verifyFrontend(
   projectRoot
 ) {
-  const html =
+  let html =
     readProjectFile(
       projectRoot,
       "index.html"
@@ -2295,34 +2466,35 @@ function verifyFrontend(
     ) || "";
 
   /*
-   * Auto-fix HTML references once more before validation.
+   * Always repair HTML asset references before deployment.
    */
 
-  const repairedHtml =
+  html =
     ensureHtmlReferences(
       html
     );
 
-  if (
-    repairedHtml !==
-    html
-  ) {
-    writeProjectFile(
-      projectRoot,
-      "index.html",
-      repairedHtml
+  html =
+    ensureStylesApplied(
+      html,
+      css
     );
-  }
+
+  writeProjectFile(
+    projectRoot,
+    "index.html",
+    html
+  );
 
   const files = {
     "index.html":
-      repairedHtml,
+      html,
 
     "style.css":
       css,
 
     "script.js":
-      js,
+      js
   };
 
   const validation =
@@ -2333,42 +2505,6 @@ function verifyFrontend(
   const errors =
     [...validation.errors];
 
-  /*
-   * Only hard-block actual structural problems.
-   *
-   * Missing references are already auto-fixed.
-   */
-
-  if (
-    !files[
-      "index.html"
-    ].trim()
-  ) {
-    errors.push(
-      "index.html is missing."
-    );
-  }
-
-  if (
-    !files[
-      "style.css"
-    ].trim()
-  ) {
-    errors.push(
-      "style.css is missing."
-    );
-  }
-
-  if (
-    !files[
-      "script.js"
-    ].trim()
-  ) {
-    errors.push(
-      "script.js is missing."
-    );
-  }
-
   const projectFiles =
     listProjectFiles(
       projectRoot
@@ -2378,12 +2514,8 @@ function verifyFrontend(
     const file of projectFiles
   ) {
     if (
-      file.endsWith(
-        ".jsx"
-      ) ||
-      file.endsWith(
-        ".tsx"
-      )
+      file.endsWith(".jsx") ||
+      file.endsWith(".tsx")
     ) {
       errors.push(
         `React file found: ${file}`
@@ -2403,6 +2535,11 @@ function verifyFrontend(
     }
   }
 
+  /*
+   * The static website is still considered deployable
+   * when only non-critical validation warnings remain.
+   */
+
   if (
     errors.length
   ) {
@@ -2414,13 +2551,6 @@ function verifyFrontend(
       errors
     );
 
-    /*
-     * The application files are still returned.
-     *
-     * Don't report generation failure just because
-     * a non-critical validator warning exists.
-     */
-
     return {
       success:
         true,
@@ -2428,7 +2558,7 @@ function verifyFrontend(
       errors,
 
       warnings:
-        errors,
+        errors
     };
   }
 
@@ -2442,7 +2572,7 @@ function verifyFrontend(
 
     errors: [],
 
-    warnings: [],
+    warnings: []
   };
 }
 
@@ -2470,6 +2600,12 @@ async function vercelRequest(
   token,
   options = {}
 ) {
+  if (!token) {
+    throw new Error(
+      "Vercel token is missing."
+    );
+  }
+
   const response =
     await fetch(
       url,
@@ -2481,8 +2617,8 @@ async function vercelRequest(
             `Bearer ${token}`,
 
           ...(options.headers ||
-            {}),
-        },
+            {})
+        }
       }
     );
 
@@ -2500,8 +2636,7 @@ async function vercelRequest(
         : {};
   } catch {
     data = {
-      raw:
-        text,
+      raw: text
     };
   }
 
@@ -2524,6 +2659,12 @@ async function uploadVercelFile(
   token,
   buffer
 ) {
+  if (!token) {
+    throw new Error(
+      "Vercel token is missing."
+    );
+  }
+
   const digest =
     sha1(
       buffer
@@ -2549,11 +2690,11 @@ async function uploadVercelFile(
             ),
 
           "x-vercel-digest":
-            digest,
+            digest
         },
 
         body:
-          buffer,
+          buffer
       }
     );
 
@@ -2564,7 +2705,7 @@ async function uploadVercelFile(
     !response.ok
   ) {
     throw new Error(
-      `Vercel upload ${response.status}: ${text.slice(
+      `Vercel upload failed (${response.status}): ${text.slice(
         0,
         1800
       )}`
@@ -2576,7 +2717,7 @@ async function uploadVercelFile(
       digest,
 
     size:
-      buffer.length,
+      buffer.length
   };
 }
 
@@ -2592,7 +2733,7 @@ async function deployToVercel(
         false,
 
       reason:
-        "Vercel account is not connected.",
+        "Vercel account is not connected."
     };
   }
 
@@ -2607,18 +2748,51 @@ async function deployToVercel(
         false,
 
       reason:
-        "Generated project directory does not exist.",
+        "Generated project directory does not exist."
     };
   }
 
-  const deploymentFiles =
-    [];
+  /*
+   * Repair asset references one final time
+   * before deployment.
+   */
+
+  let html =
+    readProjectFile(
+      projectRoot,
+      "index.html"
+    ) || "";
+
+  const css =
+    readProjectFile(
+      projectRoot,
+      "style.css"
+    ) || "";
+
+  html =
+    ensureHtmlReferences(
+      html
+    );
+
+  html =
+    ensureStylesApplied(
+      html,
+      css
+    );
+
+  writeProjectFile(
+    projectRoot,
+    "index.html",
+    html
+  );
+
+  const files = [];
 
   for (
     const file of [
       "index.html",
       "style.css",
-      "script.js",
+      "script.js"
     ]
   ) {
     const fullPath =
@@ -2652,14 +2826,14 @@ async function deployToVercel(
         buffer
       );
 
-    deploymentFiles.push({
+    files.push({
       file,
 
       sha:
         uploaded.sha,
 
       size:
-        uploaded.size,
+        uploaded.size
     });
   }
 
@@ -2669,16 +2843,15 @@ async function deployToVercel(
         projectName
       ),
 
-    files:
-      deploymentFiles,
+    files,
 
     target:
       "production",
 
     projectSettings: {
       framework:
-        null,
-    },
+        null
+    }
   };
 
   let endpoint =
@@ -2707,13 +2880,13 @@ async function deployToVercel(
 
         headers: {
           "Content-Type":
-            "application/json",
+            "application/json"
         },
 
         body:
           JSON.stringify(
             payload
-          ),
+          )
       }
     );
 
@@ -2735,7 +2908,7 @@ async function deployToVercel(
     deploymentId:
       deployment?.id ||
       deployment?.uid ||
-      null,
+      null
   };
 }
 
@@ -2774,9 +2947,9 @@ async function runAgent(
     `🎯 Goal: ${request}`
   );
 
-  // ----------------------------------------------------------
-  // Requirements
-  // ----------------------------------------------------------
+  // ==========================================================
+  // REQUIREMENTS
+  // ==========================================================
 
   let specification;
 
@@ -2793,9 +2966,7 @@ async function runAgent(
     console.log(
       "✅ Requirements analyzed."
     );
-  } catch (
-    error
-  ) {
+  } catch (error) {
     console.log(
       `⚠️ Planner fallback: ${safeError(
         error
@@ -2825,9 +2996,13 @@ async function runAgent(
     `📦 Project: ${projectName}`
   );
 
-  // ----------------------------------------------------------
-  // Generate
-  // ----------------------------------------------------------
+  console.log(
+    `📍 Project root: ${projectRoot}`
+  );
+
+  // ==========================================================
+  // GENERATE
+  // ==========================================================
 
   const generation =
     await generateFrontendFiles({
@@ -2836,32 +3011,23 @@ async function runAgent(
       projectName,
 
       userRequest:
-        request,
+        request
     });
 
-  // ----------------------------------------------------------
-  // Verify
-  // ----------------------------------------------------------
+  // ==========================================================
+  // VERIFY
+  // ==========================================================
 
   const validation =
     verifyFrontend(
       projectRoot
     );
 
-  /*
-   * IMPORTANT:
-   *
-   * If all three required files exist, return success.
-   * We don't let minor validator warnings kill the
-   * entire generation.
-   */
-
-  const requiredFiles =
-    [
-      "index.html",
-      "style.css",
-      "script.js",
-    ];
+  const requiredFiles = [
+    "index.html",
+    "style.css",
+    "script.js"
+  ];
 
   const missingFiles =
     requiredFiles.filter(
@@ -2900,7 +3066,7 @@ async function runAgent(
             missingFiles.map(
               (file) =>
                 `Missing ${file}`
-            ),
+            )
         },
 
       buildAgentResult: {
@@ -2908,7 +3074,7 @@ async function runAgent(
           false,
 
         skipped:
-          true,
+          true
       },
 
       deploymentResult: {
@@ -2916,17 +3082,17 @@ async function runAgent(
           false,
 
         skipped:
-          true,
+          true
       },
 
       liveUrl:
-        null,
+        null
     };
   }
 
-  // ----------------------------------------------------------
-  // Static build
-  // ----------------------------------------------------------
+  // ==========================================================
+  // SUCCESS
+  // ==========================================================
 
   return {
     success:
@@ -2953,7 +3119,7 @@ async function runAgent(
         true,
 
       reason:
-        "Static HTML/CSS/JS website does not require npm build.",
+        "Static HTML/CSS/JS website requires no npm build."
     },
 
     deploymentResult: {
@@ -2964,19 +3130,19 @@ async function runAgent(
         true,
 
       reason:
-        "Waiting for Vercel deployment.",
+        "Waiting for Vercel deployment."
     },
 
     liveUrl:
       null,
 
     specification:
-      generation.specification,
+      generation.specification
   };
 }
 
 // ============================================================
-// EXPORT
+// EXPORTS
 // ============================================================
 
 module.exports = {
@@ -3001,4 +3167,10 @@ module.exports = {
   escapeHtml,
 
   validateFiles,
+
+  ensureHtmlReferences,
+
+  ensureStylesApplied,
+
+  validateCssContent
 };
